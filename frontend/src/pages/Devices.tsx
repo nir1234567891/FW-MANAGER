@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Search, Plus, LayoutGrid, List, RefreshCw, Download, Eye, Trash2,
-  Server, X, Cpu, MemoryStick, HardDrive, Network, Shield, ChevronRight, Terminal,
+  Server, X, Cpu, MemoryStick, HardDrive, Network, Shield, ChevronRight, Terminal, ExternalLink,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import DeviceCard from '@/components/DeviceCard';
@@ -211,6 +211,13 @@ export default function Devices() {
     setTimeout(() => setActionMessage(''), 3500);
   };
 
+  const connectHttps = (device: Device) => {
+    const url = `https://${device.ip_address}:${device.port}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+    setActionMessage(`Opening ${device.name} management interface...`);
+    setTimeout(() => setActionMessage(''), 2500);
+  };
+
   return (
     <div className="space-y-4 animate-fade-in">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
@@ -273,6 +280,10 @@ export default function Devices() {
               onSsh={(id) => {
                 const device = mockDevices.find((d) => d.id === id);
                 if (device) openSshModal(device);
+              }}
+              onHttps={(id) => {
+                const device = mockDevices.find((d) => d.id === id);
+                if (device) connectHttps(device);
               }}
             />
           ))}
@@ -353,26 +364,37 @@ export default function Devices() {
                     <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center gap-1">
                         <button
+                          onClick={() => connectHttps(device)}
+                          className="p-1.5 text-slate-400 hover:text-blue-400 hover:bg-dark-700 rounded transition-colors"
+                          title="Open HTTPS Management"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </button>
+                        <button
                           onClick={() => handleRefreshDevice(device.id)}
                           className="p-1.5 text-slate-400 hover:text-primary-400 hover:bg-dark-700 rounded transition-colors"
+                          title="Refresh Status"
                         >
                           <RefreshCw className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={() => goToBackups(device)}
                           className="p-1.5 text-slate-400 hover:text-emerald-400 hover:bg-dark-700 rounded transition-colors"
+                          title="View Backups"
                         >
                           <Download className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={() => openSshModal(device)}
                           className="p-1.5 text-slate-400 hover:text-cyan-400 hover:bg-dark-700 rounded transition-colors"
+                          title="SSH Connection"
                         >
                           <Terminal className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={() => { setSelectedDevice(device); setDeleteModalOpen(true); }}
                           className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-dark-700 rounded transition-colors"
+                          title="Delete Device"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -519,8 +541,15 @@ export default function Devices() {
 
               <div className="flex gap-2 pt-2">
                 <button
-                  onClick={() => handleRefreshDevice(detailDevice.id)}
+                  onClick={() => connectHttps(detailDevice)}
                   className="btn-primary flex-1 justify-center text-sm"
+                  title="Open HTTPS management interface"
+                >
+                  <ExternalLink className="w-4 h-4" /> HTTPS
+                </button>
+                <button
+                  onClick={() => handleRefreshDevice(detailDevice.id)}
+                  className="btn-secondary flex-1 justify-center text-sm"
                 >
                   <RefreshCw className="w-4 h-4" /> Refresh
                 </button>

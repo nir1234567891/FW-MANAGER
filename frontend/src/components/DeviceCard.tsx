@@ -1,4 +1,4 @@
-import { Server, RefreshCw, Download, Eye, Cpu, MemoryStick, HardDrive, Terminal } from 'lucide-react';
+import { Server, RefreshCw, Download, Eye, Cpu, MemoryStick, HardDrive, Terminal, ExternalLink } from 'lucide-react';
 import StatusBadge from './StatusBadge';
 import type { Device } from '@/types';
 import { clsx } from 'clsx';
@@ -9,6 +9,7 @@ interface DeviceCardProps {
   onBackup?: (id: string) => void;
   onView?: (id: string) => void;
   onSsh?: (id: string) => void;
+  onHttps?: (id: string) => void;
 }
 
 function UsageBar({ label, value, icon: Icon }: { label: string; value: number; icon: React.ElementType }) {
@@ -39,7 +40,7 @@ function formatUptime(seconds: number): string {
   return `${hours}h ${minutes}m`;
 }
 
-export default function DeviceCard({ device, onRefresh, onBackup, onView, onSsh }: DeviceCardProps) {
+export default function DeviceCard({ device, onRefresh, onBackup, onView, onSsh, onHttps }: DeviceCardProps) {
   return (
     <div className="glass-card-hover p-5 flex flex-col gap-4">
       <div className="flex items-start justify-between">
@@ -72,30 +73,41 @@ export default function DeviceCard({ device, onRefresh, onBackup, onView, onSsh 
         <UsageBar label="Disk" value={device.disk_usage} icon={HardDrive} />
       </div>
 
-      <div className="grid grid-cols-2 gap-2 pt-1 border-t border-dark-700/50">
+      <div className="grid grid-cols-3 gap-2 pt-1 border-t border-dark-700/50">
+        <button
+          onClick={() => onHttps?.(device.id)}
+          className="flex items-center justify-center gap-1.5 py-1.5 text-xs text-slate-400 hover:text-blue-400 hover:bg-dark-700 rounded-md transition-colors"
+          title="Open HTTPS Management"
+        >
+          <ExternalLink className="w-3.5 h-3.5" /> HTTPS
+        </button>
+        <button
+          onClick={() => onSsh?.(device.id)}
+          className="flex items-center justify-center gap-1.5 py-1.5 text-xs text-slate-400 hover:text-cyan-400 hover:bg-dark-700 rounded-md transition-colors"
+          title="SSH Connection"
+        >
+          <Terminal className="w-3.5 h-3.5" /> SSH
+        </button>
         <button
           onClick={() => onRefresh?.(device.id)}
           className="flex items-center justify-center gap-1.5 py-1.5 text-xs text-slate-400 hover:text-primary-400 hover:bg-dark-700 rounded-md transition-colors"
+          title="Refresh Status"
         >
           <RefreshCw className="w-3.5 h-3.5" /> Refresh
         </button>
         <button
           onClick={() => onBackup?.(device.id)}
           className="flex items-center justify-center gap-1.5 py-1.5 text-xs text-slate-400 hover:text-emerald-400 hover:bg-dark-700 rounded-md transition-colors"
+          title="View Backups"
         >
           <Download className="w-3.5 h-3.5" /> Backup
         </button>
         <button
-          onClick={() => onSsh?.(device.id)}
-          className="flex items-center justify-center gap-1.5 py-1.5 text-xs text-slate-400 hover:text-cyan-400 hover:bg-dark-700 rounded-md transition-colors"
-        >
-          <Terminal className="w-3.5 h-3.5" /> SSH
-        </button>
-        <button
           onClick={() => onView?.(device.id)}
-          className="flex items-center justify-center gap-1.5 py-1.5 text-xs text-slate-400 hover:text-amber-400 hover:bg-dark-700 rounded-md transition-colors"
+          className="flex items-center justify-center gap-1.5 py-1.5 text-xs text-slate-400 hover:text-amber-400 hover:bg-dark-700 rounded-md transition-colors col-span-2"
+          title="View Details"
         >
-          <Eye className="w-3.5 h-3.5" /> View
+          <Eye className="w-3.5 h-3.5" /> View Details
         </button>
       </div>
     </div>
