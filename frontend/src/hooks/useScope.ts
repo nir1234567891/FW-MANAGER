@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
+import { deviceService } from '@/services/api';
+import { mapBackendDevice } from '@/utils/mapDevice';
 
 export interface ScopeDevice {
   id: string;
@@ -13,7 +15,7 @@ export interface GlobalScopeState {
 
 const SCOPE_KEY = 'fortimanager-pro-global-scope';
 
-export const scopeDevices: ScopeDevice[] = [
+const fallbackScopeDevices: ScopeDevice[] = [
   { id: '1', name: 'FG-HQ-DC1', vdoms: ['root', 'DMZ', 'Guest'] },
   { id: '2', name: 'FG-HQ-DC2', vdoms: ['root', 'DMZ', 'Guest'] },
   { id: '3', name: 'FG-BRANCH-NYC', vdoms: ['root'] },
@@ -21,6 +23,12 @@ export const scopeDevices: ScopeDevice[] = [
   { id: '5', name: 'FG-BRANCH-TKY', vdoms: ['root'] },
   { id: '6', name: 'FG-BRANCH-SYD', vdoms: ['root'] },
 ];
+
+// Shared mutable state for devices loaded from API
+let _scopeDevices: ScopeDevice[] = fallbackScopeDevices;
+let _loaded = false;
+
+export { _scopeDevices as scopeDevices };
 
 const defaultScope: GlobalScopeState = { deviceId: 'all', vdom: 'all' };
 
@@ -49,11 +57,41 @@ function notify() {
 
 export function useScope() {
   const [scope, setScopeState] = useState<GlobalScopeState>(loadScope);
+  const [devices, setDevices] = useState<ScopeDevice[]>(_scopeDevices);
 
   useEffect(() => {
     const refresh = () => setScopeState(loadScope());
     listeners.add(refresh);
     return () => void listeners.delete(refresh);
+  }, []);
+
+  // Load real devices from API once
+  useEffect(() => {
+    if (_loaded) {
+      setDevices(_scopeDevices);
+      return;
+    }
+    deviceService.getAll()
+      .then((res) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const list = res.data as any[];
+        if (Array.isArray(list) && list.length > 0) {
+          const mapped: ScopeDevice[] = list.map((d: any) => {
+            const dev = mapBackendDevice(d);
+            return {
+              id: dev.id,
+              name: dev.name,
+              vdoms: Array.isArray(d.vdom_list) && d.vdom_list.length > 0
+                ? d.vdom_list as string[]
+                : ['root'],
+            };
+          });
+          _scopeDevices = mapped;
+          _loaded = true;
+          setDevices(mapped);
+        }
+      })
+      .catch(() => { /* keep fallback */ });
   }, []);
 
   const setScope = useCallback((next: GlobalScopeState) => {
@@ -80,7 +118,7 @@ export function useScope() {
     notify();
   }, []);
 
-  const selectedDevice = scopeDevices.find((d) => d.id === scope.deviceId) || null;
+  const selectedDevice = devices.find((d) => d.id === scope.deviceId) || null;
   const availableVdoms = scope.deviceId === 'all'
     ? ['all']
     : ['all', ...(selectedDevice?.vdoms || ['root'])];
@@ -91,7 +129,7 @@ export function useScope() {
     setDeviceId,
     setVdom,
     selectedDevice,
-    devices: scopeDevices,
+    devices,
     availableVdoms,
   };
 }

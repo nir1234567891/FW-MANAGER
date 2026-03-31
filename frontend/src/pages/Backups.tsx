@@ -10,6 +10,8 @@ import type { Backup } from '@/types';
 import { format, formatDistanceToNow } from 'date-fns';
 import { clsx } from 'clsx';
 import { useScope } from '@/hooks/useScope';
+import { deviceService } from '@/services/api';
+import { mapBackendDevice } from '@/utils/mapDevice';
 
 const sampleConfig1 = `config system global
     set hostname "FG-HQ-DC1"
@@ -225,8 +227,36 @@ export default function Backups() {
   const [createNotes, setCreateNotes] = useState('');
   const [backups, setBackups] = useState<Backup[]>(loadBackups);
   const [actionMessage, setActionMessage] = useState('');
+  const [allDevices, setAllDevices] = useState<{ id: string; name: string; vdoms: string[] }[]>([]);
 
-  const devices = [...new Set(backups.map((b) => b.device_name))];
+  // Load real devices from API for the device selector
+  useEffect(() => {
+    deviceService.getAll()
+      .then((res) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const list = res.data as any[];
+        if (Array.isArray(list) && list.length > 0) {
+          setAllDevices(list.map((d: any) => {
+            const dev = mapBackendDevice(d);
+            return {
+              id: dev.id,
+              name: dev.name,
+              vdoms: Array.isArray(d.vdom_list) && d.vdom_list.length > 0
+                ? d.vdom_list as string[]
+                : ['root'],
+            };
+          }));
+        }
+      })
+      .catch(() => { /* keep empty */ });
+  }, []);
+
+  // Device names from backups + all real devices (merged, unique)
+  const devices = useMemo(() => {
+    const fromBackups = backups.map((b) => b.device_name);
+    const fromApi = allDevices.map((d) => d.name);
+    return [...new Set([...fromApi, ...fromBackups])];
+  }, [backups, allDevices]);
 
   useEffect(() => {
     if (!selectedDeviceId) return;
@@ -283,8 +313,9 @@ export default function Backups() {
       setActionMessage('יש לבחור פיירוול לפני שמירה');
       return;
     }
+    const knownDevice = allDevices.find((d) => d.name === deviceName);
     const known = backups.find((b) => b.device_name === deviceName);
-    const deviceId = known?.device_id || `${Date.now()}`;
+    const deviceId = knownDevice?.id || known?.device_id || `${Date.now()}`;
     const vdom = createVdom === 'full' ? 'Full' : createVdom;
     const newBackup: Backup = {
       id: `b${Date.now()}`,
@@ -536,9 +567,9 @@ export default function Backups() {
             <label className="block text-sm text-slate-300 mb-1.5">Scope</label>
             <select value={createVdom} onChange={(e) => setCreateVdom(e.target.value)} className="input-dark">
               <option value="full">Full Configuration</option>
-              <option value="root">VDOM: root</option>
-              <option value="DMZ">VDOM: DMZ</option>
-              <option value="Guest">VDOM: Guest</option>
+              {(allDevices.find((d) => d.name === createDevice)?.vdoms || ['root']).map((v) => (
+                <option key={v} value={v}>VDOM: {v}</option>
+              ))}
             </select>
           </div>
           <div>

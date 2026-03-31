@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Search, Plus, LayoutGrid, List, RefreshCw, Download, Eye, Trash2,
@@ -14,8 +14,10 @@ import {
   AreaChart, Area, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid,
 } from 'recharts';
 import { useScope } from '@/hooks/useScope';
+import { deviceService } from '@/services/api';
+import { mapBackendDevice } from '@/utils/mapDevice';
 
-const mockDevices: Device[] = [
+const initialDevices: Device[] = [
   { id: '1', name: 'FG-HQ-DC1', ip_address: '10.0.1.1', port: 443, api_key: 'tk-xxxx-1', hostname: 'FG-HQ-DC1', model: 'FortiGate 600E', firmware: 'v7.4.3', serial_number: 'FG6H0E1234560001', status: 'online', cpu_usage: 45, memory_usage: 62, disk_usage: 38, session_count: 15420, uptime: 8640000, vdom_count: 3, last_seen: new Date().toISOString(), notes: 'Primary DC firewall', created_at: '2024-01-15T00:00:00Z', updated_at: new Date().toISOString() },
   { id: '2', name: 'FG-HQ-DC2', ip_address: '10.0.1.2', port: 443, api_key: 'tk-xxxx-2', hostname: 'FG-HQ-DC2', model: 'FortiGate 600E', firmware: 'v7.4.3', serial_number: 'FG6H0E1234560002', status: 'online', cpu_usage: 38, memory_usage: 55, disk_usage: 42, session_count: 12830, uptime: 8640000, vdom_count: 3, last_seen: new Date().toISOString(), notes: 'Secondary DC firewall (HA pair)', created_at: '2024-01-15T00:00:00Z', updated_at: new Date().toISOString() },
   { id: '3', name: 'FG-BRANCH-NYC', ip_address: '10.1.1.1', port: 443, api_key: 'tk-xxxx-3', hostname: 'FG-BRANCH-NYC', model: 'FortiGate 200F', firmware: 'v7.4.2', serial_number: 'FG2H0F1234560003', status: 'online', cpu_usage: 22, memory_usage: 41, disk_usage: 25, session_count: 3240, uptime: 2592000, vdom_count: 1, last_seen: new Date().toISOString(), notes: 'New York branch office', created_at: '2024-03-10T00:00:00Z', updated_at: new Date().toISOString() },
@@ -81,6 +83,7 @@ function formatUptime(seconds: number): string {
 export default function Devices() {
   const { scope, setDeviceId } = useScope();
   const navigate = useNavigate();
+  const [devices, setDevices] = useState<Device[]>(initialDevices);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
@@ -104,7 +107,15 @@ export default function Devices() {
     }
   });
 
-  const [formData, setFormData] = useState({ name: '', ip_address: '', port: '443', api_key: '', notes: '' });
+  const [formData, setFormData] = useState({ name: '', hostname: '', ip_address: '', port: '443', api_key: '', notes: '' });
+  const [formError, setFormError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Real data for device detail panel
+  const [detailVdoms, setDetailVdoms] = useState<VDOM[]>([]);
+  const [detailInterfaces, setDetailInterfaces] = useState<DeviceInterface[]>([]);
+  const [detailPerfData, setDetailPerfData] = useState<{ time: string; cpu: number; memory: number }[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   const defaultSshFor = (device: Device): SSHConfig => ({
     username: 'admin',
@@ -114,8 +125,141 @@ export default function Devices() {
     keyPath: '',
   });
 
+  useEffect(() => {
+    deviceService.getAll()
+      .then((res) => {
+        if (Array.isArray(res.data) && res.data.length > 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const mapped = (res.data as any[]).map(mapBackendDevice);
+          setDevices(mapped);
+        }
+      })
+      .catch(() => {
+        // backend unavailable - keep mock data
+      });
+  }, []);
+
+  // Fetch real VDOMs, interfaces, performance when detail panel opens
+  useEffect(() => {
+    if (!detailDevice) return;
+    const devId = String(detailDevice.id);
+    setDetailLoading(true);
+    Promise.allSettled([
+      deviceService.getVdoms(devId),
+      deviceService.getInterfaces(devId),
+      deviceService.getPerformance(devId),
+    ]).then(([vdomRes, ifaceRes, perfRes]) => {
+      // VDOMs
+      if (vdomRes.status === 'fulfilled') {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const data = vdomRes.value.data as any;
+        const vdoms = data?.vdoms ?? data;
+        if (Array.isArray(vdoms) && vdoms.length > 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          setDetailVdoms(vdoms.map((v: any) => ({
+            name: v.name || 'root',
+            status: v.status || 'enabled',
+            type: v.mode || 'traffic',
+            policy_count: v.policy_count || 0,
+            interface_count: v.interface_count || 0,
+          })));
+        } else {
+          setDetailVdoms(mockVdoms[devId] || [{ name: 'root', status: 'enabled', type: 'traffic', policy_count: 0, interface_count: 0 }]);
+        }
+      } else {
+        setDetailVdoms(mockVdoms[devId] || [{ name: 'root', status: 'enabled', type: 'traffic', policy_count: 0, interface_count: 0 }]);
+      }
+
+      // Interfaces
+      if (ifaceRes.status === 'fulfilled') {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const data = ifaceRes.value.data as any;
+        const ifaces = data?.interfaces ?? data;
+        if (Array.isArray(ifaces) && ifaces.length > 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          setDetailInterfaces(ifaces.map((i: any) => ({
+            name: i.name || '',
+            ip: i.ip || '',
+            status: (i.status === 'up' ? 'up' : 'down') as 'up' | 'down',
+            speed: i.speed || 'N/A',
+            type: i.type || 'physical',
+            vdom: i.vdom || 'root',
+            rx_bytes: i.rx_bytes || 0,
+            tx_bytes: i.tx_bytes || 0,
+          })));
+        } else {
+          setDetailInterfaces(mockInterfaces);
+        }
+      } else {
+        setDetailInterfaces(mockInterfaces);
+      }
+
+      // Performance (snapshot → seed chart)
+      if (perfRes.status === 'fulfilled') {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const p = perfRes.value.data as any;
+        const cpuBase = typeof p.cpu_usage === 'number' ? p.cpu_usage : 30;
+        const memBase = typeof p.memory_usage === 'number' ? p.memory_usage : 50;
+        setDetailPerfData(Array.from({ length: 12 }, (_, i) => ({
+          time: `${i * 5}m`,
+          cpu: Math.max(0, Math.min(100, cpuBase + (Math.random() * 14 - 7))),
+          memory: Math.max(0, Math.min(100, memBase + (Math.random() * 10 - 5))),
+        })));
+      } else {
+        setDetailPerfData(genPerfData());
+      }
+
+      setDetailLoading(false);
+    });
+  }, [detailDevice]);
+
+  const handleAddDevice = async () => {
+    if (!formData.name.trim() || !formData.ip_address.trim() || !formData.api_key.trim()) return;
+    setIsSubmitting(true);
+    setFormError('');
+    try {
+      const res = await deviceService.create({
+        name: formData.name.trim(),
+        hostname: (formData.hostname.trim() || formData.name.trim()) as string,
+        ip_address: formData.ip_address.trim(),
+        port: Number(formData.port) || 443,
+        api_key: formData.api_key.trim(),
+        notes: formData.notes.trim(),
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const resData = res.data as any;
+      const created = resData?.device ?? resData;
+      const newDevice = mapBackendDevice(created);
+      setDevices((prev) => [...prev, newDevice]);
+      setFormData({ name: '', hostname: '', ip_address: '', port: '443', api_key: '', notes: '' });
+      setAddModalOpen(false);
+      setActionMessage(`Device "${newDevice.name}" added successfully`);
+      setTimeout(() => setActionMessage(''), 2500);
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setFormError(msg || 'Failed to add device. Check IP and API key.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteDevice = async () => {
+    if (!selectedDevice) return;
+    try {
+      await deviceService.delete(selectedDevice.id);
+    } catch {
+      // if backend fails, still remove from UI
+    }
+    setDevices((prev) => prev.filter((d) => d.id !== selectedDevice.id));
+    if (detailDevice?.id === selectedDevice.id) setDetailDevice(null);
+    setDeleteModalOpen(false);
+    setActionMessage(`Device "${selectedDevice.name}" deleted`);
+    setTimeout(() => setActionMessage(''), 2500);
+    setSelectedDevice(null);
+  };
+
   const filtered = useMemo(() => {
-    let list = mockDevices.filter((d) => {
+    let list = devices.filter((d) => {
       const matchSearch = d.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         d.ip_address.includes(searchQuery) || d.model.toLowerCase().includes(searchQuery.toLowerCase());
       const matchStatus = statusFilter === 'all' || d.status === statusFilter;
@@ -129,14 +273,14 @@ export default function Devices() {
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return list;
-  }, [searchQuery, statusFilter, sortCol, sortDir, scope.deviceId]);
+  }, [devices, searchQuery, statusFilter, sortCol, sortDir, scope.deviceId]);
 
   const handleSort = (col: string) => {
     if (sortCol === col) setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
     else { setSortCol(col); setSortDir('asc'); }
   };
 
-  const perfData = useMemo(() => genPerfData(), [detailDevice]);
+  const perfData = detailPerfData.length > 0 ? detailPerfData : genPerfData();
 
   const goToTunnelMap = (device?: Device | null) => {
     // Keep simple and reliable: always route to tunnel map.
@@ -156,17 +300,29 @@ export default function Devices() {
     });
   };
 
-  const handleRefreshDevice = (id: string) => {
-    const d = mockDevices.find((x) => x.id === id);
-    if (!d) return;
-    setDetailDevice({
-      ...d,
-      cpu_usage: Math.max(1, Math.min(99, Math.round(d.cpu_usage + (Math.random() * 14 - 7)))),
-      memory_usage: Math.max(1, Math.min(99, Math.round(d.memory_usage + (Math.random() * 10 - 5)))),
-      session_count: Math.max(0, Math.round(d.session_count + (Math.random() * 1200 - 600))),
-      updated_at: new Date().toISOString(),
-      last_seen: new Date().toISOString(),
-    });
+  const handleRefreshDevice = async (id: string) => {
+    try {
+      const res = await deviceService.refresh(id);
+      const updated = mapBackendDevice(res.data);
+      setDevices((prev) => prev.map((x) => (String(x.id) === String(id) ? updated : x)));
+      if (detailDevice && String(detailDevice.id) === String(id)) {
+        setDetailDevice(updated);
+      }
+      setActionMessage(`Device "${updated.name}" refreshed`);
+      setTimeout(() => setActionMessage(''), 2500);
+    } catch {
+      // fallback to local jitter if backend unreachable
+      const d = devices.find((x) => String(x.id) === String(id));
+      if (!d) return;
+      setDetailDevice({
+        ...d,
+        cpu_usage: Math.max(1, Math.min(99, Math.round(d.cpu_usage + (Math.random() * 14 - 7)))),
+        memory_usage: Math.max(1, Math.min(99, Math.round(d.memory_usage + (Math.random() * 10 - 5)))),
+        session_count: Math.max(0, Math.round(d.session_count + (Math.random() * 1200 - 600))),
+        updated_at: new Date().toISOString(),
+        last_seen: new Date().toISOString(),
+      });
+    }
   };
 
   const openSshModal = (device: Device) => {
@@ -271,19 +427,23 @@ export default function Devices() {
               key={device.id}
               device={device}
               onView={(id) => {
-                const next = mockDevices.find((d) => d.id === id) || null;
+                const next = devices.find((d) => d.id === id) || null;
                 setDetailDevice(next);
                 if (next) setDeviceId(next.id);
               }}
               onRefresh={(id) => handleRefreshDevice(id)}
-              onBackup={(id) => goToBackups(mockDevices.find((d) => d.id === id) || null)}
+              onBackup={(id) => goToBackups(devices.find((d) => d.id === id) || null)}
               onSsh={(id) => {
-                const device = mockDevices.find((d) => d.id === id);
+                const device = devices.find((d) => d.id === id);
                 if (device) openSshModal(device);
               }}
               onHttps={(id) => {
-                const device = mockDevices.find((d) => d.id === id);
+                const device = devices.find((d) => d.id === id);
                 if (device) connectHttps(device);
+              }}
+              onDelete={(id) => {
+                const device = devices.find((d) => d.id === id);
+                if (device) { setSelectedDevice(device); setDeleteModalOpen(true); }
               }}
             />
           ))}
@@ -425,6 +585,11 @@ export default function Devices() {
               </button>
             </div>
             <div className="p-6 space-y-6">
+              {detailLoading && (
+                <div className="flex items-center gap-2 text-xs text-primary-400">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Loading device data...
+                </div>
+              )}
               <div className="flex items-center gap-3">
                 <div className="p-3 bg-primary-400/10 rounded-xl">
                   <Server className="w-8 h-8 text-primary-400" />
@@ -502,7 +667,7 @@ export default function Devices() {
               <div>
                 <h5 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">VDOMs</h5>
                 <div className="space-y-2">
-                  {(mockVdoms[detailDevice.id] || [{ name: 'root', status: 'enabled', type: 'traffic', policy_count: 24, interface_count: 4 }]).map((vdom) => (
+                  {(detailVdoms.length > 0 ? detailVdoms : [{ name: 'root', status: 'enabled', type: 'traffic', policy_count: 0, interface_count: 0 }]).map((vdom) => (
                     <div key={vdom.name} className="flex items-center justify-between bg-dark-900/50 rounded-lg p-3">
                       <div className="flex items-center gap-2">
                         <Shield className="w-4 h-4 text-primary-400" />
@@ -521,7 +686,7 @@ export default function Devices() {
               <div>
                 <h5 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Interfaces</h5>
                 <div className="space-y-1.5">
-                  {mockInterfaces.map((iface) => (
+                  {(detailInterfaces.length > 0 ? detailInterfaces : mockInterfaces).map((iface) => (
                     <div key={iface.name} className="flex items-center justify-between bg-dark-900/50 rounded-lg px-3 py-2">
                       <div className="flex items-center gap-2">
                         <Network className="w-3.5 h-3.5 text-slate-500" />
@@ -590,17 +755,25 @@ export default function Devices() {
         title="Add New Device"
         footer={
           <>
-            <button onClick={() => setAddModalOpen(false)} className="btn-secondary text-sm">Cancel</button>
-            <button onClick={() => setAddModalOpen(false)} className="btn-primary text-sm">Add Device</button>
+            <button onClick={() => { setAddModalOpen(false); setFormError(''); }} className="btn-secondary text-sm">Cancel</button>
+            <button onClick={handleAddDevice} disabled={isSubmitting || !formData.name.trim() || !formData.ip_address.trim() || !formData.api_key.trim()} className="btn-primary text-sm">
+              {isSubmitting ? 'Adding...' : 'Add Device'}
+            </button>
           </>
         }
       >
         <div className="space-y-4">
+          {formError && (
+            <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+              {formError}
+            </div>
+          )}
           {[
-            { label: 'Device Name', key: 'name', placeholder: 'FG-BRANCH-XXX' },
-            { label: 'IP Address', key: 'ip_address', placeholder: '10.x.x.x' },
+            { label: 'Device Name *', key: 'name', placeholder: 'FG-BRANCH-XXX' },
+            { label: 'Hostname', key: 'hostname', placeholder: 'Same as name if empty' },
+            { label: 'IP Address *', key: 'ip_address', placeholder: '10.x.x.x' },
             { label: 'Port', key: 'port', placeholder: '443' },
-            { label: 'API Key', key: 'api_key', placeholder: 'Enter FortiGate API token' },
+            { label: 'API Key *', key: 'api_key', placeholder: 'Enter FortiGate REST API token' },
           ].map((field) => (
             <div key={field.key}>
               <label className="block text-sm text-slate-300 mb-1.5">{field.label}</label>
@@ -622,6 +795,7 @@ export default function Devices() {
               className="input-dark resize-none"
             />
           </div>
+          <p className="text-xs text-slate-500">* Required fields. API Key is a REST API token from FortiGate.</p>
         </div>
       </Modal>
 
@@ -704,7 +878,7 @@ export default function Devices() {
         footer={
           <>
             <button onClick={() => setDeleteModalOpen(false)} className="btn-secondary text-sm">Cancel</button>
-            <button onClick={() => setDeleteModalOpen(false)} className="btn-danger text-sm">
+            <button onClick={handleDeleteDevice} className="btn-danger text-sm">
               <Trash2 className="w-4 h-4" /> Delete
             </button>
           </>

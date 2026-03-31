@@ -1,4 +1,4 @@
-import { Server, RefreshCw, Download, Eye, Cpu, MemoryStick, HardDrive, Terminal, ExternalLink } from 'lucide-react';
+import { Server, RefreshCw, Download, Eye, Cpu, MemoryStick, HardDrive, Terminal, ExternalLink, Trash2 } from 'lucide-react';
 import StatusBadge from './StatusBadge';
 import type { Device } from '@/types';
 import { clsx } from 'clsx';
@@ -10,6 +10,7 @@ interface DeviceCardProps {
   onView?: (id: string) => void;
   onSsh?: (id: string) => void;
   onHttps?: (id: string) => void;
+  onDelete?: (id: string) => void;
 }
 
 function UsageBar({ label, value, icon: Icon }: { label: string; value: number; icon: React.ElementType }) {
@@ -40,7 +41,7 @@ function formatUptime(seconds: number): string {
   return `${hours}h ${minutes}m`;
 }
 
-export default function DeviceCard({ device, onRefresh, onBackup, onView, onSsh, onHttps }: DeviceCardProps) {
+export default function DeviceCard({ device, onRefresh, onBackup, onView, onSsh, onHttps, onDelete }: DeviceCardProps) {
   return (
     <div className="glass-card-hover p-5 flex flex-col gap-4">
       <div className="flex items-start justify-between">
@@ -59,6 +60,8 @@ export default function DeviceCard({ device, onRefresh, onBackup, onView, onSsh,
       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
         <div className="text-slate-500">IP Address</div>
         <div className="text-slate-200 text-right font-mono text-xs">{device.ip_address}</div>
+        <div className="text-slate-500">Serial</div>
+        <div className="text-slate-200 text-right font-mono text-xs">{device.serial_number}</div>
         <div className="text-slate-500">Firmware</div>
         <div className="text-slate-200 text-right text-xs">{device.firmware}</div>
         <div className="text-slate-500">VDOMs</div>
@@ -104,10 +107,17 @@ export default function DeviceCard({ device, onRefresh, onBackup, onView, onSsh,
         </button>
         <button
           onClick={() => onView?.(device.id)}
-          className="flex items-center justify-center gap-1.5 py-1.5 text-xs text-slate-400 hover:text-amber-400 hover:bg-dark-700 rounded-md transition-colors col-span-2"
+          className="flex items-center justify-center gap-1.5 py-1.5 text-xs text-slate-400 hover:text-amber-400 hover:bg-dark-700 rounded-md transition-colors"
           title="View Details"
         >
-          <Eye className="w-3.5 h-3.5" /> View Details
+          <Eye className="w-3.5 h-3.5" /> Details
+        </button>
+        <button
+          onClick={() => onDelete?.(device.id)}
+          className="flex items-center justify-center gap-1.5 py-1.5 text-xs text-slate-400 hover:text-red-400 hover:bg-dark-700 rounded-md transition-colors"
+          title="Delete Device"
+        >
+          <Trash2 className="w-3.5 h-3.5" /> Delete
         </button>
       </div>
     </div>

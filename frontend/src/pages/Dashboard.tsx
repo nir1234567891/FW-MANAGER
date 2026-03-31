@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, BarChart, Bar, Legend,
@@ -13,6 +13,8 @@ import StatusBadge from '@/components/StatusBadge';
 import type { Device, Alert } from '@/types';
 import { formatDistanceToNow } from 'date-fns';
 import { useScope } from '@/hooks/useScope';
+import { deviceService, monitoringService } from '@/services/api';
+import { mapBackendDevice } from '@/utils/mapDevice';
 
 const mockDevices: Device[] = [
   { id: '1', name: 'FG-HQ-DC1', ip_address: '10.0.1.1', port: 443, api_key: '', hostname: 'FG-HQ-DC1', model: 'FortiGate 600E', firmware: 'v7.4.3', serial_number: 'FG6H0E1234560001', status: 'online', cpu_usage: 45, memory_usage: 62, disk_usage: 38, session_count: 15420, uptime: 8640000, vdom_count: 3, last_seen: new Date().toISOString(), notes: '', created_at: '', updated_at: '' },
@@ -80,12 +82,57 @@ const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?:
 export default function Dashboard() {
   const { scope } = useScope();
   const [trafficData] = useState(generateTrafficData);
+  const [devices, setDevices] = useState<Device[]>(mockDevices);
+  const [alerts, setAlerts] = useState<Alert[]>(mockAlerts);
+
+  useEffect(() => {
+    Promise.allSettled([
+      deviceService.getAll(),
+      monitoringService.getAlerts(),
+    ]).then(([devResult, alertResult]) => {
+      if (devResult.status === 'fulfilled' && Array.isArray(devResult.value.data) && devResult.value.data.length > 0) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const mapped = (devResult.value.data as any[]).map(mapBackendDevice);
+        setDevices(mapped);
+
+        // Build device name lookup for alerts
+        const devMap = new Map(mapped.map((d) => [String(d.id), d.name]));
+
+        if (alertResult.status === 'fulfilled' && Array.isArray(alertResult.value.data) && alertResult.value.data.length > 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          setAlerts(alertResult.value.data.map((a: any) => ({
+            id: String(a.id),
+            device_id: String(a.device_id),
+            device_name: a.device_name || devMap.get(String(a.device_id)) || `Device ${a.device_id}`,
+            severity: a.severity || 'medium',
+            type: a.alert_type || a.type || 'unknown',
+            message: a.message || '',
+            acknowledged: a.acknowledged || false,
+            created_at: a.created_at || new Date().toISOString(),
+          })) as Alert[]);
+        }
+      } else if (alertResult.status === 'fulfilled' && Array.isArray(alertResult.value.data) && alertResult.value.data.length > 0) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        setAlerts(alertResult.value.data.map((a: any) => ({
+          id: String(a.id),
+          device_id: String(a.device_id),
+          device_name: a.device_name || `Device ${a.device_id}`,
+          severity: a.severity || 'medium',
+          type: a.alert_type || a.type || 'unknown',
+          message: a.message || '',
+          acknowledged: a.acknowledged || false,
+          created_at: a.created_at || new Date().toISOString(),
+        })) as Alert[]);
+      }
+    });
+  }, []);
+
   const scopedDevices = scope.deviceId === 'all'
-    ? mockDevices
-    : mockDevices.filter((d) => d.id === scope.deviceId);
+    ? devices
+    : devices.filter((d) => d.id === scope.deviceId);
   const scopedAlerts = scope.deviceId === 'all'
-    ? mockAlerts
-    : mockAlerts.filter((a) => a.device_id === scope.deviceId);
+    ? alerts
+    : alerts.filter((a) => a.device_id === scope.deviceId);
 
   const onlineCount = scopedDevices.filter((d) => d.status === 'online').length;
   const offlineCount = scopedDevices.filter((d) => d.status === 'offline').length;

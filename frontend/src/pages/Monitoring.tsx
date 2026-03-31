@@ -9,8 +9,10 @@ import {
 import { clsx } from 'clsx';
 import { useSettings } from '../hooks/useSettings';
 import { useScope } from '../hooks/useScope';
+import { deviceService } from '@/services/api';
+import { mapBackendDevice } from '@/utils/mapDevice';
 
-const devices = [
+const fallbackDevices = [
   { id: '1', name: 'FG-HQ-DC1' },
   { id: '2', name: 'FG-HQ-DC2' },
   { id: '3', name: 'FG-BRANCH-NYC' },
@@ -100,11 +102,44 @@ const ChartTooltip = ({ active, payload, label }: { active?: boolean; payload?: 
 export default function Monitoring() {
   const { settings } = useSettings();
   const { scope, setDeviceId } = useScope();
+  const [devices, setDevices] = useState(fallbackDevices);
   const [selectedDevice, setSelectedDevice] = useState('1');
   const [refreshing, setRefreshing] = useState(true);
   const [interval, setRefreshInterval] = useState(() => Number(settings.refreshInterval) * 1000 || 5000);
   const [data, setData] = useState(() => generatePerfData(deviceBases['1']));
+  const [realBases, setRealBases] = useState<Record<string, { cpu: number; mem: number; sessions: number; bwIn: number; bwOut: number }>>({});
   const intervalRef = useRef<ReturnType<typeof setInterval>>();
+
+  // Load real device list on mount
+  useEffect(() => {
+    deviceService.getAll()
+      .then((res) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const list = res.data as any[];
+        if (Array.isArray(list) && list.length > 0) {
+          const fullDevices = list.map(mapBackendDevice);
+          const mapped = fullDevices.map((d) => ({ id: d.id, name: d.name }));
+          setDevices(mapped);
+          // Build real performance bases from device data
+          const bases: typeof realBases = {};
+          for (const d of fullDevices) {
+            bases[d.id] = {
+              cpu: d.cpu_usage || 5,
+              mem: d.memory_usage || 10,
+              sessions: d.session_count || 100,
+              bwIn: 100 + Math.random() * 400,
+              bwOut: 50 + Math.random() * 200,
+            };
+          }
+          setRealBases(bases);
+          // If currently selected device isn't in new list, select first
+          if (!mapped.find((d) => d.id === selectedDevice) && mapped.length > 0) {
+            setSelectedDevice(mapped[0].id);
+          }
+        }
+      })
+      .catch(() => { /* keep fallback */ });
+  }, []);
 
   useEffect(() => {
     const ms = Number(settings.refreshInterval) * 1000;
@@ -118,9 +153,9 @@ export default function Monitoring() {
   }, [scope.deviceId, selectedDevice]);
 
   const refreshData = useCallback(() => {
-    const base = deviceBases[selectedDevice];
+    const base = realBases[selectedDevice] || deviceBases[selectedDevice];
     if (base) setData(generatePerfData(base));
-  }, [selectedDevice]);
+  }, [selectedDevice, realBases]);
 
   useEffect(() => {
     refreshData();
@@ -136,9 +171,28 @@ export default function Monitoring() {
   }, [refreshing, interval, refreshData]);
 
   const latest = data[data.length - 1];
+  const [deviceUptimes, setDeviceUptimes] = useState<Record<string, number>>({
+    '1': 8640000, '2': 8640000, '3': 2592000, '4': 1728000, '5': 0, '6': 604800,
+  });
+  // Update uptimes when we load real devices
+  useEffect(() => {
+    deviceService.getAll()
+      .then((res) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const list = res.data as any[];
+        if (Array.isArray(list)) {
+          const uptimes: Record<string, number> = {};
+          for (const d of list) {
+            const dev = mapBackendDevice(d);
+            uptimes[dev.id] = dev.uptime;
+          }
+          setDeviceUptimes((prev) => ({ ...prev, ...uptimes }));
+        }
+      })
+      .catch(() => { /* keep fallback */ });
+  }, []);
   const formatUptime = (id: string) => {
-    const uptimes: Record<string, number> = { '1': 8640000, '2': 8640000, '3': 2592000, '4': 1728000, '5': 0, '6': 604800 };
-    const s = uptimes[id] || 0;
+    const s = deviceUptimes[id] || 0;
     if (s === 0) return '0d 0h';
     return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
   };

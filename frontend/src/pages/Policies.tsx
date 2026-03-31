@@ -7,6 +7,8 @@ import {
 import { clsx } from 'clsx';
 import type { Policy } from '@/types';
 import { useScope } from '@/hooks/useScope';
+import { deviceService, policyService } from '@/services/api';
+import { mapBackendDevice } from '@/utils/mapDevice';
 
 type LocalPolicy = Policy & {
   device_id: string;
@@ -35,7 +37,7 @@ interface FirewallUser {
   last_login: string;
 }
 
-const devices = [
+const fallbackDevices = [
   { id: '1', name: 'FG-HQ-DC1', vdoms: ['root', 'DMZ', 'Guest'] },
   { id: '2', name: 'FG-HQ-DC2', vdoms: ['root', 'DMZ', 'Guest'] },
   { id: '3', name: 'FG-BRANCH-NYC', vdoms: ['root'] },
@@ -90,6 +92,8 @@ function loadObjects(): FirewallObject[] {
 export default function Policies() {
   const { scope, setDeviceId: setGlobalDeviceId, setVdom: setGlobalVdom } = useScope();
   const [activeTab, setActiveTab] = useState<'policies' | 'objects' | 'users' | 'audit'>('policies');
+  const [devices, setDevicesState] = useState(fallbackDevices);
+  const [policies, setPolicies] = useState<LocalPolicy[]>(mockPolicies);
   const [selectedDeviceId, setSelectedDeviceId] = useState(scope.deviceId === 'all' ? '1' : scope.deviceId);
   const [selectedVdom, setSelectedVdom] = useState(scope.vdom === 'all' ? 'root' : scope.vdom);
   const [searchQuery, setSearchQuery] = useState('');
@@ -105,6 +109,70 @@ export default function Policies() {
   const [newObjectValue, setNewObjectValue] = useState('');
   const [newObjectComment, setNewObjectComment] = useState('');
   const [newObjectTargets, setNewObjectTargets] = useState<string[]>([]);
+
+  // Load real devices on mount
+  useEffect(() => {
+    deviceService.getAll()
+      .then((res) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const list = res.data as any[];
+        if (Array.isArray(list) && list.length > 0) {
+          const mapped = list.map((d: any) => {
+            const dev = mapBackendDevice(d);
+            return {
+              id: dev.id,
+              name: dev.name,
+              vdoms: Array.isArray(d.vdom_list) && d.vdom_list.length > 0
+                ? d.vdom_list as string[]
+                : ['root'],
+            };
+          });
+          setDevicesState(mapped);
+        }
+      })
+      .catch(() => { /* keep fallback */ });
+  }, []);
+
+  // Load real policies when device/vdom changes
+  useEffect(() => {
+    if (selectedDeviceId === 'all') {
+      setPolicies(mockPolicies);
+      return;
+    }
+    policyService.getByDevice(selectedDeviceId, selectedVdom === 'all' ? undefined : selectedVdom)
+      .then((res) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const data = res.data as any;
+        const raw = data?.policies ?? data;
+        if (Array.isArray(raw) && raw.length > 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const mapped: LocalPolicy[] = raw.map((p: any) => ({
+            id: p.policy_id ?? p.id ?? 0,
+            device_id: String(data?.device_id ?? selectedDeviceId),
+            vdom: p.vdom_name || p.vdom || 'root',
+            name: p.name || '',
+            source_interface: p.srcintf || p.source_interface || '',
+            dest_interface: p.dstintf || p.dest_interface || '',
+            source_address: p.srcaddr || p.source_address || '',
+            dest_address: p.dstaddr || p.dest_address || '',
+            service: p.service || 'ALL',
+            action: p.action || 'accept',
+            nat: p.nat === 'enable' || p.nat === true,
+            log: p.logtraffic !== 'disable' && p.log !== false,
+            status: p.status === 'enable' || p.status === 'enabled' ? 'enabled' : 'disabled',
+            hit_count: p.hit_count || 0,
+            schedule: p.schedule || 'always',
+            comments: p.comments || '',
+          }));
+          setPolicies(mapped);
+        } else {
+          setPolicies(mockPolicies.filter((p) => p.device_id === selectedDeviceId));
+        }
+      })
+      .catch(() => {
+        setPolicies(mockPolicies.filter((p) => p.device_id === selectedDeviceId));
+      });
+  }, [selectedDeviceId, selectedVdom]);
 
   useEffect(() => {
     if (scope.deviceId !== 'all') setSelectedDeviceId(scope.deviceId);
@@ -122,7 +190,7 @@ export default function Policies() {
   const currentDevice = devices.find((d) => d.id === selectedDeviceId);
 
   const filtered = useMemo(() => {
-    return mockPolicies.filter((p) => {
+    return policies.filter((p) => {
       const q = searchQuery.toLowerCase();
       const deviceMatch = selectedDeviceId === 'all' || p.device_id === selectedDeviceId;
       const vdomMatch = selectedVdom === 'all' || p.vdom === selectedVdom;
@@ -132,7 +200,7 @@ export default function Policies() {
         p.service.toLowerCase().includes(q);
       return deviceMatch && vdomMatch && textMatch;
     });
-  }, [searchQuery, selectedDeviceId, selectedVdom]);
+  }, [policies, searchQuery, selectedDeviceId, selectedVdom]);
 
   const totalAccept = filtered.filter((p) => p.action === 'accept').length;
   const totalDeny = filtered.filter((p) => p.action === 'deny').length;
@@ -541,7 +609,7 @@ export default function Policies() {
       )}
 
       {activeTab === 'audit' && (() => {
-        const scopedPolicies = mockPolicies.filter((p) => {
+        const scopedPolicies = policies.filter((p) => {
           const devMatch = selectedDeviceId === 'all' || p.device_id === selectedDeviceId;
           const vdomMatch = selectedVdom === 'all' || p.vdom === selectedVdom;
           return devMatch && vdomMatch;

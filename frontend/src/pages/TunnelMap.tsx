@@ -23,6 +23,8 @@ import StatusBadge from '@/components/StatusBadge';
 import type { VPNTunnel } from '@/types';
 import { clsx } from 'clsx';
 import { useScope } from '@/hooks/useScope';
+import { deviceService, tunnelService } from '@/services/api';
+import { mapBackendDevice } from '@/utils/mapDevice';
 
 const mockTunnels: VPNTunnel[] = [
   { id: 't1', name: 'HQ-DC1-to-NYC', type: 'ipsec', status: 'up', source_device_id: '1', source_device_name: 'FG-HQ-DC1', dest_device_id: '3', dest_device_name: 'FG-BRANCH-NYC', source_ip: '10.0.1.1', dest_ip: '10.1.1.1', local_subnet: '10.0.0.0/16', remote_subnet: '10.1.0.0/16', incoming_bytes: 524288000, outgoing_bytes: 312475648, phase1_status: 'up', phase2_status: 'up', uptime: 2592000, last_change: new Date(Date.now() - 2592000000).toISOString() },
@@ -140,43 +142,144 @@ export default function TunnelMap() {
   const selectedDeviceId = routeDeviceId || (scope.deviceId === 'all' ? undefined : scope.deviceId);
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedTunnel, setSelectedTunnel] = useState<VPNTunnel | null>(null);
+  const [realDeviceNodes, setRealDeviceNodes] = useState<typeof deviceNodeData>([]);
+  const [realTunnels, setRealTunnels] = useState<VPNTunnel[]>([]);
+  const [dataLoaded, setDataLoaded] = useState(false);
 
-  const initialNodes = useMemo(() => buildNodes(), []);
-  const initialEdges = useMemo(() => buildEdges(statusFilter), [statusFilter]);
+  // Load real devices and tunnels from API
+  useEffect(() => {
+    Promise.allSettled([
+      deviceService.getAll(),
+      tunnelService.getAll(),
+    ]).then(([devResult, tunnelResult]) => {
+      // Devices → nodes
+      if (devResult.status === 'fulfilled') {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const list = devResult.value.data as any[];
+        if (Array.isArray(list) && list.length > 0) {
+          setRealDeviceNodes(list.map((d: any) => {
+            const dev = mapBackendDevice(d);
+            return {
+              id: dev.id,
+              name: dev.name,
+              model: dev.model,
+              ip: dev.ip_address,
+              status: dev.status as 'online' | 'offline' | 'warning',
+              role: d.ha_status === 'active-passive' ? 'HA' : d.notes || 'Firewall',
+            };
+          }));
+        }
+      }
+      // Tunnels
+      if (tunnelResult.status === 'fulfilled') {
+        const data = tunnelResult.value.data;
+        const tunnels = Array.isArray(data) ? data : [];
+        if (tunnels.length > 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          setRealTunnels(tunnels.map((t: any) => ({
+            id: String(t.id),
+            name: t.name || '',
+            type: t.type || 'ipsec',
+            status: t.status || 'down',
+            source_device_id: String(t.source_device_id),
+            source_device_name: t.source_device_name || '',
+            dest_device_id: String(t.dest_device_id),
+            dest_device_name: t.dest_device_name || '',
+            source_ip: t.source_ip || '',
+            dest_ip: t.dest_ip || '',
+            local_subnet: t.local_subnet || '',
+            remote_subnet: t.remote_subnet || '',
+            incoming_bytes: t.incoming_bytes || 0,
+            outgoing_bytes: t.outgoing_bytes || 0,
+            phase1_status: t.phase1_status || 'down',
+            phase2_status: t.phase2_status || 'down',
+            uptime: t.uptime || 0,
+            last_change: t.last_change || '',
+          })));
+        }
+      }
+      setDataLoaded(true);
+    });
+  }, []);
+
+  // Use real data if loaded, fall back to mock
+  const activeDeviceNodes = realDeviceNodes.length > 0 ? realDeviceNodes : deviceNodeData;
+  const activeTunnels = dataLoaded && realTunnels.length > 0 ? realTunnels : mockTunnels;
+
+  function buildNodesFromData(): Node[] {
+    const count = activeDeviceNodes.length;
+    const cx = 500, cy = 300;
+    const radius = Math.max(250, count * 40);
+    return activeDeviceNodes.map((d, i) => {
+      const angle = (2 * Math.PI * i) / count - Math.PI / 2;
+      return {
+        id: d.id,
+        type: 'fortigate',
+        position: { x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) },
+        data: d,
+      };
+    });
+  }
+
+  function buildEdgesFromData(filter: string): Edge[] {
+    const filtered = filter === 'all' ? activeTunnels : activeTunnels.filter((t) => t.status === filter);
+    return filtered.map((t) => ({
+      id: t.id,
+      source: t.source_device_id,
+      target: t.dest_device_id,
+      data: { tunnel: t },
+      style: {
+        stroke: t.status === 'up' ? '#34d399' : '#f87171',
+        strokeWidth: 2,
+        strokeDasharray: t.status === 'down' ? '8 4' : undefined,
+      },
+      animated: t.status === 'up',
+      label: t.name,
+      labelStyle: { fill: '#94a3b8', fontSize: 10, fontWeight: 500 },
+      labelBgStyle: { fill: '#0f172a', fillOpacity: 0.85 },
+      labelBgPadding: [6, 3] as [number, number],
+      labelBgBorderRadius: 4,
+      markerEnd: { type: MarkerType.ArrowClosed, color: t.status === 'up' ? '#34d399' : '#f87171', width: 15, height: 15 },
+    }));
+  }
+
+  const initialNodes = useMemo(() => buildNodesFromData(), [activeDeviceNodes]);
+  const initialEdges = useMemo(() => buildEdgesFromData(statusFilter), [statusFilter, activeTunnels]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
 
   const onEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
-    const tunnel = mockTunnels.find((t) => t.id === edge.id);
+    const tunnel = activeTunnels.find((t) => t.id === edge.id);
     if (tunnel) setSelectedTunnel(tunnel);
-  }, []);
+  }, [activeTunnels]);
 
   const handleAutoLayout = useCallback(() => {
-    setNodes(buildNodes());
-  }, [setNodes]);
+    setNodes(buildNodesFromData());
+  }, [setNodes, activeDeviceNodes]);
 
   const buildEdgesWithDeviceFilter = useCallback((filter: string) => {
-    const byStatus = buildEdges(filter);
+    const byStatus = buildEdgesFromData(filter);
     if (!selectedDeviceId) return byStatus;
     return byStatus.filter((e) => {
       const t = e.data?.tunnel as VPNTunnel | undefined;
       if (!t) return false;
       return t.source_device_id === selectedDeviceId || t.dest_device_id === selectedDeviceId;
     });
-  }, [selectedDeviceId]);
+  }, [selectedDeviceId, activeTunnels]);
 
   const handleRefresh = useCallback(() => {
     setEdges(buildEdgesWithDeviceFilter(statusFilter));
   }, [statusFilter, setEdges, buildEdgesWithDeviceFilter]);
 
   useEffect(() => {
+    setNodes(buildNodesFromData());
     setEdges(buildEdgesWithDeviceFilter(statusFilter));
-  }, [statusFilter, selectedDeviceId, setEdges, buildEdgesWithDeviceFilter]);
+  }, [statusFilter, selectedDeviceId, setEdges, setNodes, buildEdgesWithDeviceFilter, activeDeviceNodes]);
 
   const visibleTunnels = selectedDeviceId
-    ? mockTunnels.filter((t) => t.source_device_id === selectedDeviceId || t.dest_device_id === selectedDeviceId)
-    : mockTunnels;
+    ? activeTunnels.filter((t) => t.source_device_id === selectedDeviceId || t.dest_device_id === selectedDeviceId)
+    : activeTunnels;
   const upCount = visibleTunnels.filter((t) => t.status === 'up').length;
   const downCount = visibleTunnels.filter((t) => t.status === 'down').length;
 
