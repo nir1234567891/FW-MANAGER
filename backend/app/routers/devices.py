@@ -9,9 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import Device, VDOM
 from app.services.fortigate_api import FortiGateAPI
-import logging
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/devices", tags=["devices"])
 
@@ -111,9 +108,9 @@ async def create_device(payload: DeviceCreate, db: AsyncSession = Depends(get_db
     conn_result = await api.test_connection()
     if conn_result["success"]:
         status_data = conn_result.get("data", {})
-        device.serial_number = status_data.get("serial") or ""
-        device.firmware_version = status_data.get("version") or ""
-        device.model = status_data.get("model_name") or status_data.get("model") or ""
+        device.serial_number = status_data.get("serial", "")
+        device.firmware_version = status_data.get("version", "")
+        device.model = status_data.get("model", "")
         device.status = "online"
         device.last_seen = datetime.now(timezone.utc)
     else:
@@ -177,53 +174,23 @@ async def refresh_device(device_id: int, db: AsyncSession = Depends(get_db)):
 
     try:
         status_data = await api.get_system_status()
-        logger.info("FortiGate %s status response keys: %s", device.name, list(status_data.keys()))
-        logger.info("FortiGate %s serial=%s version=%s model=%s model_name=%s",
-                     device.name,
-                     status_data.get("serial"), status_data.get("version"),
-                     status_data.get("model"), status_data.get("model_name"))
-        device.serial_number = status_data.get("serial") or device.serial_number
-        device.firmware_version = status_data.get("version") or device.firmware_version
-        device.model = status_data.get("model_name") or status_data.get("model") or device.model
-        # Parse uptime if available
-        raw_uptime = status_data.get("uptime")
-        if raw_uptime is not None:
-            if isinstance(raw_uptime, (int, float)):
-                days = int(raw_uptime) // 86400
-                hours = (int(raw_uptime) % 86400) // 3600
-                mins = (int(raw_uptime) % 3600) // 60
-                secs = int(raw_uptime) % 60
-                device.uptime = f"{days} days {hours}:{mins:02d}:{secs:02d}"
-            else:
-                device.uptime = str(raw_uptime)
+        device.serial_number = status_data.get("serial", device.serial_number)
+        device.firmware_version = status_data.get("version", device.firmware_version)
+        device.model = status_data.get("model", device.model)
         device.status = "online"
         device.last_seen = datetime.now(timezone.utc)
     except Exception:
         device.status = "offline"
 
     try:
-        # Use resource/usage endpoint - returns clean current values
-        usage = await api.get_resource_usage()
-        if usage:
-            device.cpu_usage = float(usage.get("cpu", 0))
-            device.memory_usage = float(usage.get("mem", 0))
-            device.session_count = int(usage.get("session", 0))
-        else:
-            # Fallback to performance/status endpoint
-            perf = await api.get_system_performance()
-            if isinstance(perf, dict):
-                cpu = perf.get("cpu", {})
-                if isinstance(cpu, dict):
-                    device.cpu_usage = round(100.0 - float(cpu.get("idle", 100)), 1)
-                elif isinstance(cpu, (int, float)):
-                    device.cpu_usage = float(cpu)
-                mem = perf.get("mem", perf.get("memory", {}))
-                if isinstance(mem, dict):
-                    total = mem.get("total", 0)
-                    used = mem.get("used", 0)
-                    device.memory_usage = round((used / total) * 100, 1) if total > 0 else 0
-                elif isinstance(mem, (int, float)):
-                    device.memory_usage = float(mem)
+        perf = await api.get_system_performance()
+        if isinstance(perf, dict):
+            cpu = perf.get("cpu", {})
+            mem = perf.get("mem", perf.get("memory", {}))
+            sess = perf.get("session", {})
+            device.cpu_usage = float(cpu) if not isinstance(cpu, dict) else float(cpu.get("cpu_usage", 0))
+            device.memory_usage = float(mem) if not isinstance(mem, dict) else float(mem.get("mem_usage", 0))
+            device.session_count = int(sess) if not isinstance(sess, dict) else int(sess.get("current_sessions", 0))
     except Exception:
         pass
 
@@ -251,18 +218,6 @@ async def refresh_device(device_id: int, db: AsyncSession = Depends(get_db)):
             if not vdom:
                 vdom = VDOM(device_id=device.id, name=vdom_name)
                 db.add(vdom)
-    except Exception:
-        pass
-
-    # Get uptime via web-ui/state
-    try:
-        uptime_secs = await api.get_uptime()
-        if uptime_secs is not None:
-            days = uptime_secs // 86400
-            hours = (uptime_secs % 86400) // 3600
-            mins = (uptime_secs % 3600) // 60
-            secs = uptime_secs % 60
-            device.uptime = f"{days} days {hours}:{mins:02d}:{secs:02d}"
     except Exception:
         pass
 

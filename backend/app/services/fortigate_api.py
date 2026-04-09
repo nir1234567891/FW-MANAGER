@@ -69,14 +69,7 @@ class FortiGateAPI:
 
     async def get_system_status(self) -> dict[str, Any]:
         result = await self._get("/api/v2/monitor/system/status")
-        # FortiGate returns serial/version at top level and model inside "results"
-        # Merge both levels so callers can find all fields
-        inner = result.get("results", {})
-        if isinstance(inner, dict):
-            merged = {**inner, **{k: v for k, v in result.items() if k != "results"}}
-        else:
-            merged = result
-        return merged
+        return result.get("results", result)
 
     async def get_interfaces(self, vdom: Optional[str] = None) -> list[dict[str, Any]]:
         old_vdom = self.vdom
@@ -133,26 +126,7 @@ class FortiGateAPI:
 
     async def get_system_performance(self) -> dict[str, Any]:
         result = await self._get("/api/v2/monitor/system/performance/status")
-        inner = result.get("results", result)
-        # FortiGate may return results as a dict with cpu/mem details
-        # or the resource/usage endpoint returns lists
-        if isinstance(inner, dict):
-            return inner
-        return result
-
-    async def get_resource_usage(self) -> dict[str, Any]:
-        """Get resource/usage which returns current cpu/mem/session as simple values."""
-        result = await self._get("/api/v2/monitor/system/resource/usage")
-        inner = result.get("results", {})
-        out: dict[str, Any] = {}
-        if isinstance(inner, dict):
-            for key in ("cpu", "mem", "session"):
-                val = inner.get(key)
-                if isinstance(val, list) and val:
-                    out[key] = val[0].get("current", 0)
-                elif isinstance(val, (int, float)):
-                    out[key] = val
-        return out
+        return result.get("results", result)
 
     async def get_cpu_usage(self) -> float:
         perf = await self.get_system_performance()
@@ -200,18 +174,6 @@ class FortiGateAPI:
                 raise ConnectionError(f"Timeout during backup of {self.host}")
             except httpx.ConnectError:
                 raise ConnectionError(f"Cannot connect to {self.host}:{self.port}")
-
-    async def get_uptime(self) -> Optional[int]:
-        """Get device uptime in seconds via web-ui/state endpoint."""
-        result = await self._get("/api/v2/monitor/web-ui/state")
-        inner = result.get("results", {})
-        if isinstance(inner, dict):
-            snap = inner.get("snapshot_utc_time", 0)
-            reboot = inner.get("utc_last_reboot", 0)
-            if snap and reboot:
-                # Values are in milliseconds, convert to seconds
-                return (snap - reboot) // 1000
-        return None
 
     async def get_dhcp_leases(self, vdom: Optional[str] = None) -> list[dict[str, Any]]:
         old_vdom = self.vdom

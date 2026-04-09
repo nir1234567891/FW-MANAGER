@@ -1,12 +1,17 @@
 {
   "permissions": {
     "allow": [
-      "Bash(powershell.exe -NoProfile -Command \"Get-Process python* | Select-Object Id, ProcessName\")",
-      "Bash(powershell.exe -NoProfile -Command \"Get-CimInstance Win32_Process -Filter \"\"Name=''python.exe''\"\" | Select-Object ProcessId, @{N=''Cmd'';E={$_.CommandLine.Substring\\(0, [Math]::Min\\(120, $_.CommandLine.Length\\)\\)}} | Format-Table -AutoSize\")",
-      "Bash(curl -s -X POST http://localhost:8000/api/devices/7/refresh)"
+      "Bash(curl -s http://localhost:8000/docs)",
+      "Bash(curl -s http://localhost:3000)",
+      "Bash(git stash:*)",
+      "Bash(curl -s http://localhost:8000/)",
+      "Bash(curl -s http://localhost:3000/)",
+      "Read(//c/Users/CHF867/AppData/Local/Temp/claude/c--Users-CHF867-FortiManager-Pro/8a899eb1-5528-4f93-b361-2322149634cc/tasks/**)",
+      "Bash(curl -s http://localhost:8000/api/tunnels)",
+      "Bash(python -m json.tool)"
     ],
     "additionalDirectories": [
-      "C:\\Users\\CHF867\\FortiManager-Pro\\backend\\http:\\localhost:8000\\api\\devices\\7"
+      "C:\\Users\\CHF867\\FortiManager-Pro\\frontend\\src"
     ]
   }
 }

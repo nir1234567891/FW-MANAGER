@@ -3,18 +3,7 @@
     "allow": [
       "Bash(python run.py)",
       "Bash(npm run:*)",
-      "Bash(git add:*)",
-      "Bash(grep -v \"^$\")",
-      "Bash(wc -l /c/Users/CHF867/FortiManager-Pro/backups/FGR-60F-0*/FGR-60F-0*_clean.conf)",
-      "Bash(ls -lh FGR-60F-01/*.conf FGR-60F-02/*.conf)",
-      "Bash(python3:*)",
-      "Bash(sed -n '108,118p' FGR-60F-01_v2.conf)",
-      "Bash(cd /c/Users/CHF867/FortiManager-Pro/backups/FGR-60F-01 grep -n \"virtual-switch\\\\|    next\" FGR-60F-01_v2.conf)",
-      "Bash(cd /c/Users/CHF867/FortiManager-Pro/backups/FGR-60F-01 sed -n '111,114p' FGR-60F-01_v2.conf)",
-      "Bash(/c/Users/CHF867/FortiManager-Pro/backups/FGR-60F-01/FGR-60F-01_v2.conf:*)",
-      "Bash(__NEW_LINE_b141501b6782d782__ echo:*)",
-      "Bash(find /c/Users/CHF867/FortiManager-Pro/backend -name *.py)",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8000/api/devices)"
+      "Bash(git add:*)"
     ]
   }
 }
