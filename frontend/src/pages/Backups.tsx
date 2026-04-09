@@ -10,7 +10,7 @@ import type { Backup } from '@/types';
 import { format, formatDistanceToNow } from 'date-fns';
 import { clsx } from 'clsx';
 import { useScope } from '@/hooks/useScope';
-import { deviceService } from '@/services/api';
+import { deviceService, backupService } from '@/services/api';
 import { mapBackendDevice } from '@/utils/mapDevice';
 
 const sampleConfig1 = `config system global
@@ -229,8 +229,9 @@ export default function Backups() {
   const [actionMessage, setActionMessage] = useState('');
   const [allDevices, setAllDevices] = useState<{ id: string; name: string; vdoms: string[] }[]>([]);
 
-  // Load real devices from API for the device selector
+  // Load real devices and backups from API
   useEffect(() => {
+    // Load devices
     deviceService.getAll()
       .then((res) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -249,6 +250,38 @@ export default function Backups() {
         }
       })
       .catch(() => { /* keep empty */ });
+
+    // Load backups from API
+    backupService.getAll()
+      .then(async (res) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const list = res.data as any[];
+        if (Array.isArray(list) && list.length > 0) {
+          // Get device names for each backup
+          const devicesRes = await deviceService.getAll();
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const devices = devicesRes.data as any[];
+          const deviceMap = new Map(devices.map((d: any) => [String(d.id), d.name]));
+
+          const realBackups: Backup[] = list.map((b: any) => ({
+            id: String(b.id),
+            device_id: String(b.device_id),
+            device_name: deviceMap.get(String(b.device_id)) || `Device ${b.device_id}`,
+            vdom: b.vdom_name || 'Full',
+            backup_type: b.backup_type || 'manual',
+            file_size: b.file_size || 0,
+            file_hash: b.config_hash || '',
+            config_content: '', // Will be loaded on demand
+            notes: b.notes || '',
+            created_at: b.created_at || new Date().toISOString(),
+          }));
+
+          if (realBackups.length > 0) {
+            setBackups(realBackups);
+          }
+        }
+      })
+      .catch(() => { /* keep mock data */ });
   }, []);
 
   // Device names from backups + all real devices (merged, unique)
@@ -307,44 +340,91 @@ export default function Backups() {
   const deletions = 3;
   const modifications = 4;
 
-  const handleCreateBackup = () => {
+  const handleCreateBackup = async () => {
     const deviceName = createDevice.trim();
     if (!deviceName) {
       setActionMessage('יש לבחור פיירוול לפני שמירה');
       return;
     }
     const knownDevice = allDevices.find((d) => d.name === deviceName);
-    const known = backups.find((b) => b.device_name === deviceName);
-    const deviceId = knownDevice?.id || known?.device_id || `${Date.now()}`;
-    const vdom = createVdom === 'full' ? 'Full' : createVdom;
-    const newBackup: Backup = {
-      id: `b${Date.now()}`,
-      device_id: deviceId,
-      device_name: deviceName,
-      vdom,
-      backup_type: createVdom === 'full' ? 'manual' : 'vdom',
-      file_size: Math.floor(120000 + Math.random() * 140000),
-      file_hash: `${Math.random().toString(16).slice(2, 14)}...`,
-      config_content: createVdom === 'full' ? sampleConfig2 : sampleConfig1,
-      notes: createNotes.trim(),
-      created_at: new Date().toISOString(),
-    };
-    setBackups((prev) => [newBackup, ...prev]);
-    setCreateOpen(false);
-    setCreateVdom('full');
-    setCreateNotes('');
-    setSelectedIds([]);
-    setActionMessage(`הקונפיגורציה נשמרה בהצלחה עבור ${deviceName}`);
-    setTimeout(() => setActionMessage(''), 3000);
+    if (!knownDevice) {
+      setActionMessage('המכשיר לא נמצא');
+      return;
+    }
+
+    try {
+      setActionMessage('יוצר גיבוי...');
+      const vdomValue = createVdom === 'full' ? undefined : createVdom;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = await backupService.create({
+        device_id: knownDevice.id,
+        vdom: vdomValue,
+        notes: createNotes.trim(),
+      }) as any;
+
+      // Fetch the backup content from the server
+      let configContent = '';
+      if (res.data?.id) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const contentRes = await backupService.getContent(String(res.data.id)) as any;
+          configContent = contentRes.data?.content || '';
+        } catch {
+          configContent = 'Failed to load backup content';
+        }
+      }
+
+      const newBackup: Backup = {
+        id: String(res.data?.id || Date.now()),
+        device_id: knownDevice.id,
+        device_name: deviceName,
+        vdom: vdomValue || 'Full',
+        backup_type: res.data?.backup_type || 'manual',
+        file_size: res.data?.file_size || 0,
+        file_hash: res.data?.config_hash || '',
+        config_content: configContent,
+        notes: createNotes.trim(),
+        created_at: res.data?.created_at || new Date().toISOString(),
+      };
+      setBackups((prev) => [newBackup, ...prev]);
+      setCreateOpen(false);
+      setCreateVdom('full');
+      setCreateNotes('');
+      setSelectedIds([]);
+      setActionMessage(`הקונפיגורציה נשמרה בהצלחה עבור ${deviceName}`);
+      setTimeout(() => setActionMessage(''), 3000);
+    } catch (err) {
+      setActionMessage('שגיאה ביצירת הגיבוי');
+      setTimeout(() => setActionMessage(''), 3000);
+    }
   };
 
-  const handleDownloadBackup = (backup: Backup) => {
+  const loadBackupContent = async (backup: Backup): Promise<string> => {
+    if (backup.config_content) {
+      return backup.config_content;
+    }
     try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = await backupService.getContent(backup.id) as any;
+      const content = res.data?.content || '';
+      // Update the backup in state with the loaded content
+      setBackups((prev) =>
+        prev.map((b) => (b.id === backup.id ? { ...b, config_content: content } : b))
+      );
+      return content;
+    } catch {
+      return 'Failed to load backup content from server';
+    }
+  };
+
+  const handleDownloadBackup = async (backup: Backup) => {
+    try {
+      const content = await loadBackupContent(backup);
       const safeDevice = backup.device_name.replace(/[^a-zA-Z0-9-_]/g, '_');
       const safeVdom = backup.vdom.replace(/[^a-zA-Z0-9-_]/g, '_');
       const ts = new Date(backup.created_at).toISOString().replace(/[:.]/g, '-');
       const fileName = `${safeDevice}_${safeVdom}_${ts}.conf`;
-      const blob = new Blob([backup.config_content], { type: 'text/plain;charset=utf-8' });
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -477,8 +557,13 @@ export default function Backups() {
                         <Download className="w-3.5 h-3.5" />
                       </button>
                       <button
-                        onClick={() => { setViewContent(backup.config_content); setViewOpen(true); }}
+                        onClick={async () => {
+                          const content = await loadBackupContent(backup);
+                          setViewContent(content);
+                          setViewOpen(true);
+                        }}
                         className="p-1.5 text-slate-400 hover:text-emerald-400 hover:bg-dark-700 rounded transition-colors"
+                        title="View configuration"
                       >
                         <Eye className="w-3.5 h-3.5" />
                       </button>

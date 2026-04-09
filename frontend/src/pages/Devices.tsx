@@ -125,18 +125,26 @@ export default function Devices() {
     keyPath: '',
   });
 
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const loadDevices = async () => {
+    try {
+      setIsRefreshing(true);
+      const res = await deviceService.getAll();
+      if (Array.isArray(res.data) && res.data.length > 0) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const mapped = (res.data as any[]).map(mapBackendDevice);
+        setDevices(mapped);
+      }
+    } catch {
+      // backend unavailable - keep mock data
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   useEffect(() => {
-    deviceService.getAll()
-      .then((res) => {
-        if (Array.isArray(res.data) && res.data.length > 0) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const mapped = (res.data as any[]).map(mapBackendDevice);
-          setDevices(mapped);
-        }
-      })
-      .catch(() => {
-        // backend unavailable - keep mock data
-      });
+    loadDevices();
   }, []);
 
   // Fetch real VDOMs, interfaces, performance when detail panel opens
@@ -413,6 +421,14 @@ export default function Devices() {
               <List className="w-4 h-4" />
             </button>
           </div>
+          <button
+            onClick={loadDevices}
+            disabled={isRefreshing}
+            className="btn-secondary text-sm"
+            title="Refresh device list"
+          >
+            <RefreshCw className={clsx('w-4 h-4', isRefreshing && 'animate-spin')} /> Refresh
+          </button>
           <button onClick={() => setAddModalOpen(true)} className="btn-primary text-sm">
             <Plus className="w-4 h-4" /> Add Device
           </button>

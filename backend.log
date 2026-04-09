@@ -1,0 +1,59 @@
+INFO:     Will watch for changes in these directories: ['C:\\Users\\CHF867\\FortiManager-Pro\\backend']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [26676] using WatchFiles
+INFO:     Started server process [22292]
+INFO:     Waiting for application startup.
+2026-04-09 14:33:15,433 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-04-09 14:33:15,433 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("devices")
+2026-04-09 14:33:15,434 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-04-09 14:33:15,437 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("vdoms")
+2026-04-09 14:33:15,437 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-04-09 14:33:15,439 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("vpn_tunnels")
+2026-04-09 14:33:15,439 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-04-09 14:33:15,441 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("backups")
+2026-04-09 14:33:15,442 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-04-09 14:33:15,444 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("policies")
+2026-04-09 14:33:15,444 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-04-09 14:33:15,446 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("alerts")
+2026-04-09 14:33:15,447 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-04-09 14:33:15,449 INFO sqlalchemy.engine.Engine COMMIT
+2026-04-09 14:33:15,451 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-04-09 14:33:15,487 INFO sqlalchemy.engine.Engine SELECT devices.id, devices.name, devices.hostname, devices.ip_address, devices.port, devices.api_key, devices.serial_number, devices.firmware_version, devices.model, devices.ha_status, devices.status, devices.vdom_list, devices.cpu_usage, devices.memory_usage, devices.session_count, devices.uptime, devices.last_seen, devices.created_at, devices.updated_at, devices.notes 
+FROM devices
+ LIMIT ? OFFSET ?
+2026-04-09 14:33:15,487 INFO sqlalchemy.engine.Engine [generated in 0.00049s] (1, 0)
+2026-04-09 14:33:15,490 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     Application startup complete.
+2026-04-09 14:33:15,838 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-04-09 14:33:15,840 INFO sqlalchemy.engine.Engine SELECT devices.id, devices.name, devices.hostname, devices.ip_address, devices.port, devices.api_key, devices.serial_number, devices.firmware_version, devices.model, devices.ha_status, devices.status, devices.vdom_list, devices.cpu_usage, devices.memory_usage, devices.session_count, devices.uptime, devices.last_seen, devices.created_at, devices.updated_at, devices.notes 
+FROM devices ORDER BY devices.name
+2026-04-09 14:33:15,840 INFO sqlalchemy.engine.Engine [generated in 0.00040s] ()
+INFO:     127.0.0.1:36861 - "GET /api/devices HTTP/1.1" 200 OK
+2026-04-09 14:33:15,845 INFO sqlalchemy.engine.Engine COMMIT
+2026-04-09 14:33:21,767 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-04-09 14:33:21,770 INFO sqlalchemy.engine.Engine SELECT devices.id, devices.name, devices.hostname, devices.ip_address, devices.port, devices.api_key, devices.serial_number, devices.firmware_version, devices.model, devices.ha_status, devices.status, devices.vdom_list, devices.cpu_usage, devices.memory_usage, devices.session_count, devices.uptime, devices.last_seen, devices.created_at, devices.updated_at, devices.notes 
+FROM devices 
+WHERE devices.id = ?
+2026-04-09 14:33:21,770 INFO sqlalchemy.engine.Engine [generated in 0.00046s] (7,)
+2026-04-09 14:33:22,081 INFO sqlalchemy.engine.Engine UPDATE devices SET last_seen=?, updated_at=? WHERE devices.id = ?
+2026-04-09 14:33:22,081 INFO sqlalchemy.engine.Engine [generated in 0.00054s] ('2026-04-09 11:33:21.936572', '2026-04-09 11:33:22.081505', 7)
+2026-04-09 14:33:22,087 INFO sqlalchemy.engine.Engine SELECT vdoms.id, vdoms.device_id, vdoms.name, vdoms.mode, vdoms.status, vdoms.policy_count, vdoms.interface_count 
+FROM vdoms 
+WHERE vdoms.device_id = ? AND vdoms.name = ?
+2026-04-09 14:33:22,088 INFO sqlalchemy.engine.Engine [generated in 0.00040s] (7, 'VDOM1')
+2026-04-09 14:33:22,090 INFO sqlalchemy.engine.Engine SELECT vdoms.id, vdoms.device_id, vdoms.name, vdoms.mode, vdoms.status, vdoms.policy_count, vdoms.interface_count 
+FROM vdoms 
+WHERE vdoms.device_id = ? AND vdoms.name = ?
+2026-04-09 14:33:22,090 INFO sqlalchemy.engine.Engine [cached since 0.002863s ago] (7, 'VDOM2')
+2026-04-09 14:33:22,092 INFO sqlalchemy.engine.Engine SELECT vdoms.id, vdoms.device_id, vdoms.name, vdoms.mode, vdoms.status, vdoms.policy_count, vdoms.interface_count 
+FROM vdoms 
+WHERE vdoms.device_id = ? AND vdoms.name = ?
+2026-04-09 14:33:22,092 INFO sqlalchemy.engine.Engine [cached since 0.005052s ago] (7, 'root')
+2026-04-09 14:33:22,191 INFO sqlalchemy.engine.Engine UPDATE devices SET uptime=?, updated_at=? WHERE devices.id = ?
+2026-04-09 14:33:22,191 INFO sqlalchemy.engine.Engine [generated in 0.00045s] ('0 days 4:27:49', '2026-04-09 11:33:22.190277', 7)
+2026-04-09 14:33:22,195 INFO sqlalchemy.engine.Engine SELECT devices.id, devices.name, devices.hostname, devices.ip_address, devices.port, devices.api_key, devices.serial_number, devices.firmware_version, devices.model, devices.ha_status, devices.status, devices.vdom_list, devices.cpu_usage, devices.memory_usage, devices.session_count, devices.uptime, devices.last_seen, devices.created_at, devices.updated_at, devices.notes 
+FROM devices 
+WHERE devices.id = ?
+2026-04-09 14:33:22,196 INFO sqlalchemy.engine.Engine [generated in 0.00050s] (7,)
+INFO:     127.0.0.1:36867 - "POST /api/devices/7/refresh HTTP/1.1" 200 OK
+2026-04-09 14:33:22,199 INFO sqlalchemy.engine.Engine COMMIT

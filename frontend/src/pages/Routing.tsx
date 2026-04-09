@@ -1,10 +1,12 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   Network, Search, CheckCircle2, XCircle, ArrowRightLeft, Router,
-  Info, ChevronDown, ChevronRight, Monitor,
+  Info, ChevronDown, ChevronRight, Monitor, RefreshCw,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useScope, scopeDevices } from '@/hooks/useScope';
+import { deviceService } from '@/services/api';
+import { mapBackendDevice } from '@/utils/mapDevice';
 
 type ProtocolType = 'bgp' | 'ospf';
 type NeighborState = 'established' | 'active' | 'idle' | 'connect' | 'opensent' | 'openconfirm' | 'full' | 'loading' | '2-way' | 'down';
@@ -220,29 +222,116 @@ export default function Routing() {
   const [protocol, setProtocol] = useState<ProtocolType>('bgp');
   const [search, setSearch] = useState('');
   const [expandedDevice, setExpandedDevice] = useState<string | null>(null);
+  const [realBGP, setRealBGP] = useState<BGPNeighbor[]>([]);
+  const [realOSPF, setRealOSPF] = useState<OSPFNeighbor[]>([]);
+  const [realDevices, setRealDevices] = useState<typeof scopeDevices>([]);
+  const [loading, setLoading] = useState(false);
+
+  // Load real devices and routing data from API
+  const loadRoutingData = async () => {
+    setLoading(true);
+    try {
+      const res = await deviceService.getAll();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const list = res.data as any[];
+      if (!Array.isArray(list) || list.length === 0) { setLoading(false); return; }
+
+      const devs = list.map((d) => {
+        const dev = mapBackendDevice(d);
+        return { id: dev.id, name: dev.name, vdoms: Array.isArray(d.vdom_list) ? d.vdom_list : ['root'] };
+      });
+      setRealDevices(devs);
+
+      const bgpAll: BGPNeighbor[] = [];
+      const ospfAll: OSPFNeighbor[] = [];
+
+      await Promise.allSettled(devs.map(async (dev) => {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const bgpRes = await deviceService.getBgpNeighbors(dev.id) as any;
+          const neighbors = bgpRes.data?.bgp_neighbors || [];
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          neighbors.forEach((n: any, i: number) => {
+            bgpAll.push({
+              id: `real-bgp-${dev.id}-${i}`,
+              device_id: dev.id,
+              device_name: dev.name,
+              vdom: n.vdom || 'root',
+              neighbor_ip: n.neighbor_ip || '',
+              remote_as: n.remote_as || 0,
+              local_as: n.local_as || 0,
+              state: (n.state || 'down').toLowerCase() as NeighborState,
+              uptime: n.uptime || '—',
+              prefixes_received: n.prefixes_received || 0,
+              prefixes_sent: n.prefixes_sent || 0,
+              description: n.description || '',
+            });
+          });
+        } catch { /* skip */ }
+
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const ospfRes = await deviceService.getOspfNeighbors(dev.id) as any;
+          const neighbors = ospfRes.data?.ospf_neighbors || [];
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          neighbors.forEach((n: any, i: number) => {
+            ospfAll.push({
+              id: `real-ospf-${dev.id}-${i}`,
+              device_id: dev.id,
+              device_name: dev.name,
+              vdom: n.vdom || 'root',
+              neighbor_id: n.neighbor_id || n.neighbor_ip || '',
+              neighbor_ip: n.neighbor_ip || '',
+              area: n.area || '0.0.0.0',
+              state: (n.state || 'down').toLowerCase() as NeighborState,
+              interface_name: n.interface_name || n.interface || '',
+              priority: n.priority || 0,
+              dead_timer: n.dead_timer || '—',
+              uptime: n.uptime || '—',
+            });
+          });
+        } catch { /* skip */ }
+      }));
+
+      if (bgpAll.length > 0) setRealBGP(bgpAll);
+      if (ospfAll.length > 0) setRealOSPF(ospfAll);
+    } catch {
+      // Ignore errors
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadRoutingData();
+  }, []);
+
+  // Use real data if available, fallback to mock
+  const activeBGP = realBGP.length > 0 ? realBGP : mockBGPNeighbors;
+  const activeOSPF = realOSPF.length > 0 ? realOSPF : mockOSPFNeighbors;
 
   const deviceId = scope.deviceId;
   const vdom = scope.vdom;
 
   const bgpFiltered = useMemo(() => {
     const q = search.toLowerCase();
-    return mockBGPNeighbors.filter((n) => {
+    return activeBGP.filter((n) => {
       const devMatch = deviceId === 'all' || n.device_id === deviceId;
       const vdomMatch = vdom === 'all' || n.vdom === vdom;
       const textMatch = n.neighbor_ip.includes(q) || n.description.toLowerCase().includes(q) || n.device_name.toLowerCase().includes(q);
       return devMatch && vdomMatch && textMatch;
     });
-  }, [deviceId, vdom, search]);
+  }, [deviceId, vdom, search, activeBGP]);
 
   const ospfFiltered = useMemo(() => {
     const q = search.toLowerCase();
-    return mockOSPFNeighbors.filter((n) => {
+    return activeOSPF.filter((n) => {
       const devMatch = deviceId === 'all' || n.device_id === deviceId;
       const vdomMatch = vdom === 'all' || n.vdom === vdom;
       const textMatch = n.neighbor_ip.includes(q) || n.neighbor_id.includes(q) || n.device_name.toLowerCase().includes(q);
       return devMatch && vdomMatch && textMatch;
     });
-  }, [deviceId, vdom, search]);
+  }, [deviceId, vdom, search, activeOSPF]);
 
   const bgpUp = bgpFiltered.filter((n) => isNeighborUp(n.state)).length;
   const bgpDown = bgpFiltered.length - bgpUp;
@@ -250,13 +339,15 @@ export default function Routing() {
   const ospfDown = ospfFiltered.length - ospfUp;
 
   const interfaceDevices = useMemo(() => {
+    // Use realDevices if available, otherwise fallback to scopeDevices
+    const devices = realDevices.length > 0 ? realDevices : scopeDevices;
     if (deviceId !== 'all') {
-      const dev = scopeDevices.find((d) => d.id === deviceId);
+      const dev = devices.find((d) => d.id === deviceId);
       if (!dev) return [];
       return [dev];
     }
-    return scopeDevices;
-  }, [deviceId]);
+    return devices;
+  }, [deviceId, realDevices]);
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -273,6 +364,14 @@ export default function Routing() {
             className={clsx('btn-secondary text-sm', protocol === 'ospf' && 'bg-primary-500/20 text-primary-300 border-primary-500/30')}
           >
             <Router className="w-4 h-4" /> OSPF Neighbors
+          </button>
+          <button
+            onClick={loadRoutingData}
+            disabled={loading}
+            className="btn-secondary text-sm"
+            title="Refresh routing data"
+          >
+            <RefreshCw className={clsx('w-4 h-4', loading && 'animate-spin')} /> Refresh
           </button>
         </div>
         <div className="relative max-w-xs w-full sm:w-auto">

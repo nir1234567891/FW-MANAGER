@@ -42,13 +42,19 @@ export const deviceService = {
   getRoutes: (id: string) => api.get<Route[]>(`/devices/${id}/routes`),
   getVdoms: (id: string) => api.get<VDOM[]>(`/devices/${id}/vdoms`),
   getPerformance: (id: string) => api.get<PerformanceData[]>(`/devices/${id}/performance`),
+  getBgpNeighbors: (id: string) => api.get(`/devices/${id}/bgp`),
+  getOspfNeighbors: (id: string) => api.get(`/devices/${id}/ospf`),
 };
 
 export const backupService = {
   getAll: (params?: { device_id?: string; backup_type?: string }) =>
     api.get<Backup[]>('/backups', { params }),
-  create: (data: { device_id: string; vdom?: string; notes?: string }) =>
-    api.post<Backup>('/backups', data),
+  create: (data: { device_id: string; vdom?: string; notes?: string; backup_type?: string }) =>
+    api.post<Backup>(`/backups/${data.device_id}`, {
+      vdom_name: data.vdom,
+      backup_type: data.backup_type || 'manual',
+      notes: data.notes,
+    }),
   download: (id: string) => api.get(`/backups/${id}/download`, { responseType: 'blob' }),
   getContent: (id: string) => api.get<{ content: string }>(`/backups/${id}/content`),
   compare: (id1: string, id2: string) =>

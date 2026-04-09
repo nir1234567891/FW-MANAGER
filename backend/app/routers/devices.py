@@ -111,8 +111,34 @@ async def create_device(payload: DeviceCreate, db: AsyncSession = Depends(get_db
         device.serial_number = status_data.get("serial", "")
         device.firmware_version = status_data.get("version", "")
         device.model = status_data.get("model", "")
+        device.hostname = status_data.get("hostname", device.hostname)
         device.status = "online"
         device.last_seen = datetime.now(timezone.utc)
+
+        # Pull resource usage (CPU/memory/sessions/uptime) on create
+        try:
+            resource = await api.get_resource_usage()
+            if isinstance(resource, dict):
+                device.cpu_usage = float(_extract_current(resource.get("cpu")))
+                device.memory_usage = float(_extract_current(resource.get("mem")))
+                device.session_count = _extract_current(resource.get("session"))
+        except Exception:
+            pass
+
+        # Pull uptime
+        try:
+            uptime_secs = await api.get_uptime_seconds()
+            if uptime_secs > 0:
+                device.uptime = api.format_uptime(uptime_secs)
+        except Exception:
+            pass
+
+        # Pull VDOMs on create
+        try:
+            vdoms_data = await api.get_vdoms()
+            device.vdom_list = [v.get("name", "") for v in vdoms_data]
+        except Exception:
+            pass
     else:
         device.status = "unknown"
 
@@ -163,8 +189,20 @@ async def delete_device(device_id: int, db: AsyncSession = Depends(get_db)):
     return {"message": f"Device '{device.name}' deleted successfully"}
 
 
+def _extract_current(resource_list) -> int:
+    """Extract 'current' value from resource/usage list format."""
+    if isinstance(resource_list, list) and resource_list:
+        first = resource_list[0]
+        if isinstance(first, dict):
+            return int(first.get("current", 0))
+    return 0
+
+
 @router.post("/{device_id}/refresh")
 async def refresh_device(device_id: int, db: AsyncSession = Depends(get_db)):
+    import logging
+    log = logging.getLogger(__name__)
+
     result = await db.execute(select(Device).where(Device.id == device_id))
     device = result.scalar_one_or_none()
     if not device:
@@ -172,28 +210,72 @@ async def refresh_device(device_id: int, db: AsyncSession = Depends(get_db)):
 
     api = FortiGateAPI(host=device.ip_address, port=device.port, api_key=device.api_key)
 
+    # --- 1. System Status (serial, version, model, hostname) ---
     try:
         status_data = await api.get_system_status()
         device.serial_number = status_data.get("serial", device.serial_number)
         device.firmware_version = status_data.get("version", device.firmware_version)
         device.model = status_data.get("model", device.model)
+        device.hostname = status_data.get("hostname", device.hostname)
+        if status_data.get("uptime"):
+            device.uptime = status_data["uptime"]
         device.status = "online"
         device.last_seen = datetime.now(timezone.utc)
-    except Exception:
+    except Exception as exc:
+        log.error("System status failed for %s: %s", device.name, exc)
         device.status = "offline"
 
+    # --- 2. Resource Usage (CPU %, Memory %, Session count) ---
+    # This endpoint returns current percentages directly - works on all models
+    resource_loaded = False
     try:
-        perf = await api.get_system_performance()
-        if isinstance(perf, dict):
-            cpu = perf.get("cpu", {})
-            mem = perf.get("mem", perf.get("memory", {}))
-            sess = perf.get("session", {})
-            device.cpu_usage = float(cpu) if not isinstance(cpu, dict) else float(cpu.get("cpu_usage", 0))
-            device.memory_usage = float(mem) if not isinstance(mem, dict) else float(mem.get("mem_usage", 0))
-            device.session_count = int(sess) if not isinstance(sess, dict) else int(sess.get("current_sessions", 0))
-    except Exception:
-        pass
+        resource = await api.get_resource_usage()
+        if isinstance(resource, dict):
+            cpu_val = _extract_current(resource.get("cpu"))
+            mem_val = _extract_current(resource.get("mem"))
+            sess_val = _extract_current(resource.get("session"))
+            device.cpu_usage = float(cpu_val)
+            device.memory_usage = float(mem_val)
+            device.session_count = sess_val
+            resource_loaded = True
+            log.info("Resource usage for %s: CPU=%s%%, Mem=%s%%, Sessions=%s",
+                     device.name, cpu_val, mem_val, sess_val)
+    except Exception as exc:
+        log.error("Resource usage failed for %s: %s", device.name, exc)
 
+    # --- 3. Fallback: performance/status (if resource/usage failed) ---
+    if not resource_loaded:
+        try:
+            perf = await api.get_system_performance()
+            if isinstance(perf, dict):
+                cpu = perf.get("cpu", {})
+                if isinstance(cpu, dict):
+                    if "idle" in cpu:
+                        device.cpu_usage = round(100.0 - float(cpu.get("idle", 100)), 1)
+                    elif "cpu_usage" in cpu:
+                        device.cpu_usage = float(cpu["cpu_usage"])
+                else:
+                    device.cpu_usage = float(cpu) if cpu else 0.0
+
+                mem = perf.get("mem", perf.get("memory", {}))
+                if isinstance(mem, dict):
+                    if "total" in mem and "used" in mem and mem["total"] > 0:
+                        device.memory_usage = round(float(mem["used"]) / float(mem["total"]) * 100, 1)
+                    elif "mem_usage" in mem:
+                        device.memory_usage = float(mem["mem_usage"])
+                else:
+                    device.memory_usage = float(mem) if mem else 0.0
+        except Exception as exc:
+            log.error("Performance fetch failed for %s: %s", device.name, exc)
+
+    # --- 4. Session count fallback ---
+    if not device.session_count:
+        try:
+            device.session_count = await api.get_sessions_count()
+        except Exception:
+            pass
+
+    # --- 5. HA Status ---
     try:
         ha_data = await api.get_ha_status()
         if isinstance(ha_data, list) and ha_data:
@@ -205,6 +287,7 @@ async def refresh_device(device_id: int, db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
+    # --- 6. VDOMs ---
     try:
         vdoms_data = await api.get_vdoms()
         device.vdom_list = [v.get("name", "") for v in vdoms_data]
@@ -220,6 +303,17 @@ async def refresh_device(device_id: int, db: AsyncSession = Depends(get_db)):
                 db.add(vdom)
     except Exception:
         pass
+
+    # --- 7. Uptime: calculate from resource/usage history ---
+    try:
+        uptime_secs = await api.get_uptime_seconds()
+        if uptime_secs > 0:
+            device.uptime = api.format_uptime(uptime_secs)
+            log.info("Uptime for %s: %s (%d seconds)", device.name, device.uptime, uptime_secs)
+        else:
+            log.warning("Could not determine uptime for %s", device.name)
+    except Exception as exc:
+        log.error("Uptime calculation failed for %s: %s", device.name, exc)
 
     device.updated_at = datetime.now(timezone.utc)
     await db.flush()
@@ -303,3 +397,83 @@ async def get_device_performance(device_id: int, db: AsyncSession = Depends(get_
         "status": device.status,
         "last_seen": device.last_seen.isoformat() if device.last_seen else None,
     }
+
+
+@router.get("/{device_id}/bgp")
+async def get_device_bgp(
+    device_id: int, vdom: Optional[str] = None, db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(select(Device).where(Device.id == device_id))
+    device = result.scalar_one_or_none()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    api = FortiGateAPI(host=device.ip_address, port=device.port, api_key=device.api_key)
+    vdoms_to_check = [vdom] if vdom else (device.vdom_list or ["root"])
+    all_neighbors = []
+    for v in vdoms_to_check:
+        try:
+            neighbors = await api.get_bgp_neighbors(vdom=v)
+            for n in neighbors:
+                n["vdom"] = v
+            all_neighbors.extend(neighbors)
+        except Exception:
+            pass
+    return {"device_id": device_id, "device_name": device.name, "bgp_neighbors": all_neighbors}
+
+
+@router.get("/{device_id}/ospf")
+async def get_device_ospf(
+    device_id: int, vdom: Optional[str] = None, db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(select(Device).where(Device.id == device_id))
+    device = result.scalar_one_or_none()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    api = FortiGateAPI(host=device.ip_address, port=device.port, api_key=device.api_key)
+    vdoms_to_check = [vdom] if vdom else (device.vdom_list or ["root"])
+    all_neighbors = []
+    for v in vdoms_to_check:
+        try:
+            neighbors = await api.get_ospf_neighbors(vdom=v)
+            for n in neighbors:
+                n["vdom"] = v
+            all_neighbors.extend(neighbors)
+        except Exception:
+            pass
+    return {"device_id": device_id, "device_name": device.name, "ospf_neighbors": all_neighbors}
+
+
+@router.get("/{device_id}/debug-live")
+async def debug_live_data(device_id: int, db: AsyncSession = Depends(get_db)):
+    """Debug endpoint - fetch raw data from FortiGate to diagnose parsing issues."""
+    result = await db.execute(select(Device).where(Device.id == device_id))
+    device = result.scalar_one_or_none()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    api = FortiGateAPI(host=device.ip_address, port=device.port, api_key=device.api_key)
+    output: dict = {}
+
+    try:
+        output["system_status"] = await api.get_system_status()
+    except Exception as exc:
+        output["system_status_error"] = str(exc)
+
+    try:
+        output["performance_raw"] = await api.get_system_performance()
+    except Exception as exc:
+        output["performance_error"] = str(exc)
+
+    try:
+        output["ha_status"] = await api.get_ha_status()
+    except Exception as exc:
+        output["ha_error"] = str(exc)
+
+    try:
+        output["web_ui_state"] = await api._get("/api/v2/monitor/web-ui/state")
+    except Exception as exc:
+        output["web_ui_error"] = str(exc)
+
+    return output

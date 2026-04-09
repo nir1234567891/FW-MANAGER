@@ -68,8 +68,17 @@ class FortiGateAPI:
             return {"success": False, "error": str(exc)}
 
     async def get_system_status(self) -> dict[str, Any]:
-        result = await self._get("/api/v2/monitor/system/status")
-        return result.get("results", result)
+        """Get system status. Merges top-level fields (serial, version, build)
+        with the inner results dict, since FortiGate splits them."""
+        raw = await self._get("/api/v2/monitor/system/status")
+        results = raw.get("results", {})
+        if isinstance(results, dict):
+            # Merge top-level serial/version/build into results
+            for key in ("serial", "version", "build"):
+                if key in raw and key not in results:
+                    results[key] = raw[key]
+            return results
+        return raw
 
     async def get_interfaces(self, vdom: Optional[str] = None) -> list[dict[str, Any]]:
         old_vdom = self.vdom
@@ -128,11 +137,20 @@ class FortiGateAPI:
         result = await self._get("/api/v2/monitor/system/performance/status")
         return result.get("results", result)
 
+    async def get_resource_usage(self) -> dict[str, Any]:
+        """Get resource usage with current CPU/mem/session percentages.
+        Returns dict with cpu, mem, session, disk etc. Each is a list
+        where [0]['current'] gives the current percentage value."""
+        result = await self._get("/api/v2/monitor/system/resource/usage")
+        return result.get("results", {})
+
     async def get_cpu_usage(self) -> float:
         perf = await self.get_system_performance()
         if isinstance(perf, dict):
             cpu = perf.get("cpu", perf.get("CPU", {}))
             if isinstance(cpu, dict):
+                if "idle" in cpu:
+                    return round(100.0 - float(cpu.get("idle", 100)), 1)
                 return float(cpu.get("cpu_usage", cpu.get("used", 0)))
             return float(cpu) if cpu else 0.0
         return 0.0
@@ -142,6 +160,8 @@ class FortiGateAPI:
         if isinstance(perf, dict):
             mem = perf.get("mem", perf.get("memory", {}))
             if isinstance(mem, dict):
+                if "total" in mem and "used" in mem and mem["total"] > 0:
+                    return round(float(mem["used"]) / float(mem["total"]) * 100, 1)
                 return float(mem.get("mem_usage", mem.get("used", 0)))
             return float(mem) if mem else 0.0
         return 0.0
@@ -190,11 +210,79 @@ class FortiGateAPI:
         return result.get("results", [])
 
     async def get_sessions_count(self) -> int:
-        result = await self._get("/api/v2/monitor/firewall/session/summary")
-        data = result.get("results", {})
-        if isinstance(data, dict):
-            return int(data.get("total", 0))
+        try:
+            result = await self._get("/api/v2/monitor/firewall/session/summary")
+            data = result.get("results", {})
+            if isinstance(data, dict):
+                return int(data.get("total", 0))
+        except Exception:
+            pass
         return 0
+
+    async def get_bgp_neighbors(self, vdom: Optional[str] = None) -> list[dict[str, Any]]:
+        old_vdom = self.vdom
+        if vdom:
+            self.vdom = vdom
+        try:
+            result = await self._get("/api/v2/monitor/router/bgp/neighbors")
+            return result.get("results", [])
+        finally:
+            self.vdom = old_vdom
+
+    async def get_bgp_config(self, vdom: Optional[str] = None) -> dict[str, Any]:
+        old_vdom = self.vdom
+        if vdom:
+            self.vdom = vdom
+        try:
+            result = await self._get("/api/v2/cmdb/router/bgp")
+            return result.get("results", {})
+        finally:
+            self.vdom = old_vdom
+
+    async def get_ospf_neighbors(self, vdom: Optional[str] = None) -> list[dict[str, Any]]:
+        old_vdom = self.vdom
+        if vdom:
+            self.vdom = vdom
+        try:
+            result = await self._get("/api/v2/monitor/router/ospf/neighbors")
+            return result.get("results", [])
+        finally:
+            self.vdom = old_vdom
+
+    async def get_uptime_seconds(self) -> int:
+        """Calculate device uptime in seconds from web-ui state.
+        Uses snapshot_utc_time - utc_last_reboot to get accurate uptime.
+        Times are in milliseconds, so we divide by 1000."""
+        try:
+            result = await self._get("/api/v2/monitor/web-ui/state")
+            data = result.get("results", {})
+
+            snapshot_time = data.get("snapshot_utc_time", 0)
+            last_reboot = data.get("utc_last_reboot", 0)
+
+            if snapshot_time > 0 and last_reboot > 0:
+                # Times are in milliseconds, convert to seconds
+                uptime_seconds = int((snapshot_time - last_reboot) / 1000)
+                logger.info("Uptime calculated: %d seconds (snapshot: %d ms, reboot: %d ms)",
+                           uptime_seconds, snapshot_time, last_reboot)
+                return uptime_seconds
+            else:
+                logger.warning("Missing timestamp data: snapshot=%d, reboot=%d",
+                              snapshot_time, last_reboot)
+        except Exception as exc:
+            logger.error("Uptime calculation failed: %s", exc)
+
+        return 0
+
+    def format_uptime(self, seconds: int) -> str:
+        """Format uptime seconds as 'X days H:MM:SS'"""
+        if seconds <= 0:
+            return "0 days 0:00:00"
+        days = seconds // 86400
+        hours = (seconds % 86400) // 3600
+        mins = (seconds % 3600) // 60
+        secs = seconds % 60
+        return f"{days} days {hours}:{mins:02d}:{secs:02d}"
 
     async def get_full_device_info(self) -> dict[str, Any]:
         info: dict[str, Any] = {}
@@ -207,7 +295,17 @@ class FortiGateAPI:
         except Exception as exc:
             info["performance_error"] = str(exc)
         try:
+            info["resource_usage"] = await self.get_resource_usage()
+        except Exception as exc:
+            info["resource_usage_error"] = str(exc)
+        try:
             info["ha"] = await self.get_ha_status()
         except Exception as exc:
             info["ha_error"] = str(exc)
+        try:
+            uptime_secs = await self.get_uptime_seconds()
+            info["uptime_seconds"] = uptime_secs
+            info["uptime"] = self.format_uptime(uptime_secs)
+        except Exception as exc:
+            info["uptime_error"] = str(exc)
         return info
