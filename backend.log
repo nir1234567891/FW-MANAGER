@@ -1,0 +1,26 @@
+INFO:     Will watch for changes in these directories: ['C:\\Users\\CHF867\\FortiManager-Pro\\backend']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [3740] using WatchFiles
+INFO:     Started server process [13792]
+INFO:     Waiting for application startup.
+2026-04-12 10:29:31,451 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-04-12 10:29:31,451 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("devices")
+2026-04-12 10:29:31,451 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-04-12 10:29:31,454 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("vdoms")
+2026-04-12 10:29:31,454 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-04-12 10:29:31,455 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("vpn_tunnels")
+2026-04-12 10:29:31,456 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-04-12 10:29:31,457 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("backups")
+2026-04-12 10:29:31,457 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-04-12 10:29:31,459 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("policies")
+2026-04-12 10:29:31,459 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-04-12 10:29:31,461 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("alerts")
+2026-04-12 10:29:31,461 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-04-12 10:29:31,464 INFO sqlalchemy.engine.Engine COMMIT
+2026-04-12 10:29:31,466 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-04-12 10:29:31,488 INFO sqlalchemy.engine.Engine SELECT devices.id, devices.name, devices.hostname, devices.ip_address, devices.port, devices.api_key, devices.serial_number, devices.firmware_version, devices.model, devices.ha_status, devices.status, devices.vdom_list, devices.cpu_usage, devices.memory_usage, devices.session_count, devices.uptime, devices.last_seen, devices.created_at, devices.updated_at, devices.notes 
+FROM devices
+ LIMIT ? OFFSET ?
+2026-04-12 10:29:31,489 INFO sqlalchemy.engine.Engine [generated in 0.00044s] (1, 0)
+2026-04-12 10:29:31,491 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     Application startup complete.

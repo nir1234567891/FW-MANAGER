@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import os
 import logging
@@ -13,6 +14,7 @@ from app.database import engine, async_session, init_db, Base
 from app.models import Device, VDOM, VPNTunnel, Backup, Policy, Alert
 
 from app.routers import devices, backups, tunnels, monitoring, policies
+from app.services.health_checker import health_check_loop
 
 logger = logging.getLogger(__name__)
 
@@ -294,7 +296,24 @@ end
 async def lifespan(app: FastAPI):
     await init_db()
     await seed_demo_data()
+
+    # Start health checker background task
+    health_task = asyncio.create_task(health_check_loop())
+    print("\n" + "="*60)
+    print("[HEALTH CHECKER] Auto-checking devices every 5 minutes")
+    print("="*60 + "\n")
+    logger.info("Health checker background task started")
+
     yield
+
+    # Cancel health checker on shutdown
+    health_task.cancel()
+    try:
+        await health_task
+    except asyncio.CancelledError:
+        pass
+    print("Health checker stopped")
+
     await engine.dispose()
 
 

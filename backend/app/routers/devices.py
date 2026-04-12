@@ -224,6 +224,14 @@ async def refresh_device(device_id: int, db: AsyncSession = Depends(get_db)):
     except Exception as exc:
         log.error("System status failed for %s: %s", device.name, exc)
         device.status = "offline"
+        device.cpu_usage = 0
+        device.memory_usage = 0
+        device.session_count = 0
+        device.uptime = "0 days"
+        device.updated_at = datetime.now(timezone.utc)
+        await db.flush()
+        await db.refresh(device)
+        return _device_to_dict(device)
 
     # --- 2. Resource Usage (CPU %, Memory %, Session count) ---
     # This endpoint returns current percentages directly - works on all models

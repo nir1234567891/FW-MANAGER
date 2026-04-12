@@ -145,9 +145,10 @@ export default function TunnelMap() {
   const [realDeviceNodes, setRealDeviceNodes] = useState<typeof deviceNodeData>([]);
   const [realTunnels, setRealTunnels] = useState<VPNTunnel[]>([]);
   const [dataLoaded, setDataLoaded] = useState(false);
+  const [discovering, setDiscovering] = useState(false);
 
   // Load real devices and tunnels from API
-  useEffect(() => {
+  const loadData = useCallback(() => {
     Promise.allSettled([
       deviceService.getAll(),
       tunnelService.getAll(),
@@ -201,6 +202,20 @@ export default function TunnelMap() {
       setDataLoaded(true);
     });
   }, []);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  const handleDiscover = useCallback(async () => {
+    setDiscovering(true);
+    try {
+      await tunnelService.discover();
+      loadData();
+    } catch (err) {
+      console.error('Tunnel discovery failed:', err);
+    } finally {
+      setDiscovering(false);
+    }
+  }, [loadData]);
 
   // Use real data if loaded, fall back to mock
   const activeDeviceNodes = realDeviceNodes.length > 0 ? realDeviceNodes : deviceNodeData;
@@ -327,6 +342,9 @@ export default function TunnelMap() {
           )}
           <button onClick={handleAutoLayout} className="btn-secondary text-sm">
             <LayoutTemplate className="w-4 h-4" /> Auto Layout
+          </button>
+          <button onClick={handleDiscover} disabled={discovering} className="btn-secondary text-sm">
+            <Wifi className="w-4 h-4" /> {discovering ? 'Discovering...' : 'Discover Tunnels'}
           </button>
           <button onClick={handleRefresh} className="btn-primary text-sm">
             <RefreshCw className="w-4 h-4" /> Refresh
