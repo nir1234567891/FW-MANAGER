@@ -1,5 +1,10 @@
 import os
+from pathlib import Path
 from pydantic_settings import BaseSettings
+
+# Get the project root directory (3 levels up from this file: backend/app/config.py -> root)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+DATABASE_PATH = PROJECT_ROOT / "fortimanager.db"
 
 
 class Settings(BaseSettings):
@@ -7,7 +12,7 @@ class Settings(BaseSettings):
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = True
 
-    DATABASE_URL: str = "sqlite+aiosqlite:///./fortimanager.db"
+    DATABASE_URL: str = f"sqlite+aiosqlite:///{DATABASE_PATH}"
     BACKUP_DIR: str = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "backups")
 
     SECRET_KEY: str = "fortimanager-pro-secret-key-change-in-production"

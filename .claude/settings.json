@@ -49,7 +49,22 @@
       "Bash(grep -n \"backup\" backend/app/routers/*.py)",
       "Bash(python -m pytest --collect-only)",
       "Bash(findstr /I \"python node\")",
-      "Bash(curl -s http://localhost:8000/api/backups)"
+      "Bash(curl -s http://localhost:8000/api/backups)",
+      "Bash(ls -lh *.db backend/*.db)",
+      "Bash(sqlite3 fortimanager.db \"SELECT name, ip_address, model FROM devices ORDER BY id;\")",
+      "Bash(sqlite3 backend/fortimanager.db \"SELECT name, ip_address, model FROM devices ORDER BY id;\")",
+      "Bash(python -c \"import os; print\\('CWD would be:', os.getcwd\\(\\)\\)\")",
+      "Bash(python -c \"import sqlite3; conn = sqlite3.connect\\('fortimanager.db'\\); cursor = conn.cursor\\(\\); cursor.execute\\('SELECT name, ip_address, model FROM devices'\\); print\\('\\\\\\\\n'.join\\([f'{row[0]} | {row[1]} | {row[2]}' for row in cursor.fetchall\\(\\)]\\)\\); conn.close\\(\\)\")",
+      "Bash(python -c \"import sqlite3; conn = sqlite3.connect\\('/tmp/old_db.db'\\); cursor = conn.cursor\\(\\); cursor.execute\\('SELECT name, ip_address, model FROM devices'\\); print\\('Devices in ADDING NEW FW commit:'\\); print\\('\\\\\\\\n'.join\\([f'{row[0]} | {row[1]} | {row[2]}' for row in cursor.fetchall\\(\\)]\\)\\); conn.close\\(\\)\")",
+      "Bash(ls -d backups/*/)",
+      "Bash(python -c \"import sqlite3; conn = sqlite3.connect\\('fortimanager.db'\\); cursor = conn.cursor\\(\\); cursor.execute\\('SELECT id, name, ip_address, model, created_at FROM devices ORDER BY id'\\); import json; rows = cursor.fetchall\\(\\); print\\('All devices in current database:'\\); for row in rows: print\\(f'ID: {row[0]} | Name: {row[1]} | IP: {row[2]} | Model: {row[3]} | Created: {row[4]}'\\); conn.close\\(\\)\")",
+      "Bash(python -c \"import sys, json; data = json.load\\(sys.stdin\\); print\\('Total devices:', len\\(data\\)\\); print\\('Device names:', [d['name'] for d in data]\\)\")",
+      "Bash(pkill -f \"uvicorn.*main:app\")",
+      "Bash(curl -s http://localhost:8000/api/health)",
+      "Bash(pkill -f \"python.*run.py\")",
+      "Bash(kill 1553)",
+      "Bash(taskkill //F //PID 1553)",
+      "Bash(echo \"Server starting with PID: $!\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\CHF867\\FortiManager-Pro\\frontend\\src"
