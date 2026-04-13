@@ -68,6 +68,7 @@ export interface VPNTunnel {
   phase2_status: string;
   uptime: number;
   last_change: string;
+  vdom_name?: string;
 }
 
 export interface Backup {

@@ -68,6 +68,9 @@ async def discover_tunnels(db: AsyncSession) -> dict:
                     local_subnet = local_sub[0].get("subnet", "") if isinstance(local_sub, list) and local_sub else ""
                     remote_subnet = remote_sub[0].get("subnet", "") if isinstance(remote_sub, list) and remote_sub else ""
 
+                    # creation_time = שניות מאז שהטאנל עלה
+                    uptime_secs = int(tdata.get("creation_time", 0))
+
                     if tunnel_name in existing:
                         tunnel = existing[tunnel_name]
                         tunnel.remote_gateway = str(remote_gw)
@@ -79,6 +82,7 @@ async def discover_tunnels(db: AsyncSession) -> dict:
                         tunnel.local_subnet = str(local_subnet)
                         tunnel.remote_subnet = str(remote_subnet)
                         tunnel.vdom_name = vdom_name
+                        tunnel.uptime_seconds = uptime_secs
                     else:
                         tunnel = VPNTunnel(
                             device_id=device.id,
@@ -93,6 +97,7 @@ async def discover_tunnels(db: AsyncSession) -> dict:
                             phase2_name=str(phase2),
                             local_subnet=str(local_subnet),
                             remote_subnet=str(remote_subnet),
+                            uptime_seconds=uptime_secs,
                         )
                         db.add(tunnel)
                         discovered += 1
@@ -228,22 +233,30 @@ async def build_topology(db: AsyncSession) -> dict:
         if not tunnel.remote_device_id:
             continue
 
-        edge_key_fwd = f"{tunnel.device_id}-{tunnel.remote_device_id}"
-        edge_key_rev = f"{tunnel.remote_device_id}-{tunnel.device_id}"
-        if edge_key_fwd in seen_edges or edge_key_rev in seen_edges:
+        # Deduplicate by normalized device pair + tunnel name
+        # so tun-vdom1 on FW-A→FW-B and tun-vdom1 on FW-B→FW-A = 1 edge
+        # but tun-vdom1 and tun-vdom2 between same pair = 2 separate edges
+        lo = min(tunnel.device_id, tunnel.remote_device_id)
+        hi = max(tunnel.device_id, tunnel.remote_device_id)
+        edge_key = f"{lo}-{hi}-{tunnel.tunnel_name}"
+        if edge_key in seen_edges:
             continue
-        seen_edges.add(edge_key_fwd)
+        seen_edges.add(edge_key)
 
         edge_color = "#22c55e" if tunnel.status == "up" else "#ef4444"
         animated = tunnel.status == "up"
 
+        edge_label = tunnel.tunnel_name
+        if tunnel.vdom_name and tunnel.vdom_name != "root":
+            edge_label = f"{tunnel.tunnel_name} ({tunnel.vdom_name})"
+
         edges.append({
-            "id": f"e{tunnel.device_id}-{tunnel.remote_device_id}",
+            "id": f"e{lo}-{hi}-{tunnel.tunnel_name}",
             "source": str(tunnel.device_id),
             "target": str(tunnel.remote_device_id),
             "type": "smoothstep",
             "animated": animated,
-            "label": tunnel.tunnel_name,
+            "label": edge_label,
             "style": {"stroke": edge_color, "strokeWidth": 2},
             "data": {
                 "tunnel_id": tunnel.id,

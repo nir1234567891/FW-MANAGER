@@ -73,7 +73,18 @@
       "Bash(curl -s -X POST http://localhost:8000/api/tunnels/discover)",
       "Bash(python -c \" import json, sys devices = json.load\\(sys.stdin\\) for d in devices: if d['name'] == 'SITEA': print\\(f'SITEA: status={d[\\\\\"status\\\\\"]}, cpu={d[\\\\\"cpu_usage\\\\\"]}, mem={d[\\\\\"memory_usage\\\\\"]}, uptime={d[\\\\\"uptime\\\\\"]}, sessions={d[\\\\\"session_count\\\\\"]}'\\) \")",
       "Bash(wmic process:*)",
-      "Bash(python -c \" import json, sys tunnels = json.load\\(sys.stdin\\) print\\('=== FW-A / FW-B Tunnels ==='\\) for t in tunnels: if t['source_device_id'] in ['8','9'] or t['dest_device_id'] in ['8','9']: print\\(f' {t[\\\\\"name\\\\\"]} \\({t[\\\\\"source_device_name\\\\\"]} -> {t[\\\\\"dest_device_name\\\\\"]}\\) [{t[\\\\\"status\\\\\"]}]'\\) print\\(f'\\\\nTotal tunnels: {len\\(tunnels\\)}'\\) \")"
+      "Bash(python -c \" import json, sys tunnels = json.load\\(sys.stdin\\) print\\('=== FW-A / FW-B Tunnels ==='\\) for t in tunnels: if t['source_device_id'] in ['8','9'] or t['dest_device_id'] in ['8','9']: print\\(f' {t[\\\\\"name\\\\\"]} \\({t[\\\\\"source_device_name\\\\\"]} -> {t[\\\\\"dest_device_name\\\\\"]}\\) [{t[\\\\\"status\\\\\"]}]'\\) print\\(f'\\\\nTotal tunnels: {len\\(tunnels\\)}'\\) \")",
+      "Bash(curl -s http://localhost:8000/api/tunnels/topology)",
+      "Bash(taskkill //F //PID 21436 //T)",
+      "Bash(taskkill //F //PID 15888 //T)",
+      "Bash(taskkill //F //PID 4728 //T)",
+      "Bash(taskkill //F //PID 13272 //T)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3001)",
+      "Bash(python -c \" import sys, json data = json.load\\(sys.stdin\\) for d in data: print\\(f\\\\\" {d['name']}: vdom_list={d.get\\('vdom_list', []\\)}\\\\\"\\)\")",
+      "Bash(python -c \" import sys, json data = json.load\\(sys.stdin\\) for t in data: if t.get\\('device_id'\\) in [8, 9]: print\\(f\\\\\"{t['tunnel_name']} \\(device={t['device_id']}, vdom={t['vdom_name']}\\): uptime={t['uptime']}s status={t['status']}\\\\\"\\) \")",
+      "Bash(taskkill //F //PID 8992 //T)",
+      "Bash(taskkill //F //PID 28256 //T)",
+      "Bash(python -c \" import sys, json data = json.load\\(sys.stdin\\) for t in data: if t.get\\('device_id'\\) in [8, 9]: mins = t['uptime'] // 60 hrs = mins // 60 print\\(f\\\\\"{t['tunnel_name']} vdom={t['vdom_name']}: uptime={hrs}h{mins%60}m status={t['status']}\\\\\"\\) \")"
     ],
     "additionalDirectories": [
       "C:\\Users\\CHF867\\FortiManager-Pro\\frontend\\src"

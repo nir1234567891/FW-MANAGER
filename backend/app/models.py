@@ -73,6 +73,7 @@ class VPNTunnel(Base):
     phase2_name = Column(String(255), nullable=True)
     local_subnet = Column(String(50), nullable=True)
     remote_subnet = Column(String(50), nullable=True)
+    uptime_seconds = Column(Integer, default=0)
     last_check = Column(DateTime, default=utcnow)
 
     device = relationship("Device", back_populates="vpn_tunnels", foreign_keys=[device_id])

@@ -41,7 +41,7 @@ async def _tunnel_to_dict(t, db: AsyncSession) -> dict:
         "outgoing_bytes": t.outgoing_bytes or 0,
         "phase1_status": "up" if t.status == "up" else "down",
         "phase2_status": "up" if t.status == "up" else "down",
-        "uptime": 0,  # TODO: Calculate from last_check
+        "uptime": t.uptime_seconds or 0,
         "last_change": t.last_check.isoformat() if t.last_check else None,
         # Legacy fields
         "device_id": t.device_id,

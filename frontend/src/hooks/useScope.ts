@@ -104,7 +104,7 @@ export function useScope() {
     const prev = loadScope();
     const next: GlobalScopeState = {
       deviceId,
-      vdom: deviceId === 'all' ? 'all' : prev.vdom === 'all' ? 'root' : prev.vdom,
+      vdom: prev.vdom === 'all' ? 'all' : prev.vdom,
     };
     saveScope(next);
     setScopeState(next);
@@ -120,7 +120,7 @@ export function useScope() {
 
   const selectedDevice = devices.find((d) => d.id === scope.deviceId) || null;
   const availableVdoms = scope.deviceId === 'all'
-    ? ['all']
+    ? ['all', ...Array.from(new Set(devices.flatMap((d) => d.vdoms)))]
     : ['all', ...(selectedDevice?.vdoms || ['root'])];
 
   return {

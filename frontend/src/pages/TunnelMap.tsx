@@ -53,10 +53,10 @@ function FortiGateNode({ data }: NodeProps) {
 
   return (
     <div className={clsx('bg-dark-800 border rounded-xl p-4 min-w-[180px] shadow-lg', borderColor, glowColor)}>
-      <Handle type="target" position={Position.Top} className="!bg-primary-500 !w-2 !h-2 !border-dark-800" />
-      <Handle type="source" position={Position.Bottom} className="!bg-primary-500 !w-2 !h-2 !border-dark-800" />
-      <Handle type="target" position={Position.Left} className="!bg-primary-500 !w-2 !h-2 !border-dark-800" />
-      <Handle type="source" position={Position.Right} className="!bg-primary-500 !w-2 !h-2 !border-dark-800" />
+      <Handle type="target" position={Position.Top} id="top" className="!bg-primary-500 !w-2 !h-2 !border-dark-800" />
+      <Handle type="source" position={Position.Bottom} id="bottom" className="!bg-primary-500 !w-2 !h-2 !border-dark-800" />
+      <Handle type="target" position={Position.Left} id="left" className="!bg-primary-500 !w-2 !h-2 !border-dark-800" />
+      <Handle type="source" position={Position.Right} id="right" className="!bg-primary-500 !w-2 !h-2 !border-dark-800" />
       <div className="flex items-center gap-2 mb-2">
         <div className="p-1.5 bg-primary-400/10 rounded-lg">
           <Shield className="w-4 h-4 text-primary-400" />
@@ -89,7 +89,7 @@ function formatBytes(bytes: number): string {
 }
 
 function formatUptime(seconds: number): string {
-  if (seconds === 0) return 'Down';
+  if (seconds <= 0) return 'N/A';
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
   return d > 0 ? `${d}d ${h}h` : `${h}h`;
@@ -196,6 +196,7 @@ export default function TunnelMap() {
             phase2_status: t.phase2_status || 'down',
             uptime: t.uptime || 0,
             last_change: t.last_change || '',
+            vdom_name: t.vdom_name || '',
           })));
         }
       }
@@ -219,7 +220,11 @@ export default function TunnelMap() {
 
   // Use real data if loaded, fall back to mock
   const activeDeviceNodes = realDeviceNodes.length > 0 ? realDeviceNodes : deviceNodeData;
-  const activeTunnels = dataLoaded && realTunnels.length > 0 ? realTunnels : mockTunnels;
+  const allTunnels = dataLoaded && realTunnels.length > 0 ? realTunnels : mockTunnels;
+  // סינון לפי VDOM שנבחר ב-scope הגלובלי
+  const activeTunnels = scope.vdom === 'all'
+    ? allTunnels
+    : allTunnels.filter((t) => t.vdom_name === scope.vdom);
 
   function buildNodesFromData(): Node[] {
     const count = activeDeviceNodes.length;
@@ -238,24 +243,68 @@ export default function TunnelMap() {
 
   function buildEdgesFromData(filter: string): Edge[] {
     const filtered = filter === 'all' ? activeTunnels : activeTunnels.filter((t) => t.status === filter);
-    return filtered.map((t) => ({
-      id: t.id,
-      source: t.source_device_id,
-      target: t.dest_device_id,
-      data: { tunnel: t },
-      style: {
-        stroke: t.status === 'up' ? '#34d399' : '#f87171',
-        strokeWidth: 2,
-        strokeDasharray: t.status === 'down' ? '8 4' : undefined,
-      },
-      animated: t.status === 'up',
-      label: t.name,
-      labelStyle: { fill: '#94a3b8', fontSize: 10, fontWeight: 500 },
-      labelBgStyle: { fill: '#0f172a', fillOpacity: 0.85 },
-      labelBgPadding: [6, 3] as [number, number],
-      labelBgBorderRadius: 4,
-      markerEnd: { type: MarkerType.ArrowClosed, color: t.status === 'up' ? '#34d399' : '#f87171', width: 15, height: 15 },
-    }));
+
+    // דדופליקציה: אם אותו טאנל קיים בשני הכיוונים (FW-A→FW-B ו-FW-B→FW-A) - מציגים רק אחד
+    const seen = new Set<string>();
+    const deduped = filtered.filter((t) => {
+      const lo = Math.min(Number(t.source_device_id), Number(t.dest_device_id));
+      const hi = Math.max(Number(t.source_device_id), Number(t.dest_device_id));
+      const key = `${lo}-${hi}-${t.name}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    // ספירת קווים בין כל זוג מכשירים - לניתוב ויזואלי שונה
+    const pairCount: Record<string, number> = {};
+    const pairIndex: Record<string, number> = {};
+    for (const t of deduped) {
+      const lo = Math.min(Number(t.source_device_id), Number(t.dest_device_id));
+      const hi = Math.max(Number(t.source_device_id), Number(t.dest_device_id));
+      const pk = `${lo}-${hi}`;
+      pairCount[pk] = (pairCount[pk] || 0) + 1;
+    }
+
+    return deduped.map((t) => {
+      const lo = Math.min(Number(t.source_device_id), Number(t.dest_device_id));
+      const hi = Math.max(Number(t.source_device_id), Number(t.dest_device_id));
+      const pk = `${lo}-${hi}`;
+      const idx = pairIndex[pk] || 0;
+      pairIndex[pk] = idx + 1;
+
+      // קווים מקבילים: handles שונים + סוג edge שונה כדי שהנתיבים לא יחפפו
+      const isParallel = pairCount[pk] > 1;
+      const handleProps = isParallel && idx > 0
+        ? { sourceHandle: 'right', targetHandle: 'left' }
+        : { sourceHandle: 'bottom', targetHandle: 'top' };
+      // bezier עקום, straight ישר - נתיבים שונים לגמרי
+      const edgeType = isParallel && idx > 0 ? 'straight' : 'default';
+
+      // label עם שם VDOM אם רלוונטי
+      const vdom = t.vdom_name && t.vdom_name !== 'root' ? ` (${t.vdom_name})` : '';
+      const edgeLabel = `${t.name}${vdom}`;
+
+      return {
+        id: `${lo}-${hi}-${t.name}`,
+        source: t.source_device_id,
+        target: t.dest_device_id,
+        type: edgeType,
+        ...handleProps,
+        data: { tunnel: t },
+        style: {
+          stroke: t.status === 'up' ? '#34d399' : '#f87171',
+          strokeWidth: 2,
+          strokeDasharray: t.status === 'down' ? '8 4' : undefined,
+        },
+        animated: t.status === 'up',
+        label: edgeLabel,
+        labelStyle: { fill: '#94a3b8', fontSize: 10, fontWeight: 500 },
+        labelBgStyle: { fill: '#0f172a', fillOpacity: 0.85 },
+        labelBgPadding: [6, 3] as [number, number],
+        labelBgBorderRadius: 4,
+        markerEnd: { type: MarkerType.ArrowClosed, color: t.status === 'up' ? '#34d399' : '#f87171', width: 15, height: 15 },
+      };
+    });
   }
 
   const initialNodes = useMemo(() => buildNodesFromData(), [activeDeviceNodes]);
@@ -265,9 +314,9 @@ export default function TunnelMap() {
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
 
   const onEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
-    const tunnel = activeTunnels.find((t) => t.id === edge.id);
+    const tunnel = (edge.data as { tunnel?: VPNTunnel })?.tunnel;
     if (tunnel) setSelectedTunnel(tunnel);
-  }, [activeTunnels]);
+  }, []);
 
   const handleAutoLayout = useCallback(() => {
     setNodes(buildNodesFromData());
@@ -287,14 +336,31 @@ export default function TunnelMap() {
     setEdges(buildEdgesWithDeviceFilter(statusFilter));
   }, [statusFilter, setEdges, buildEdgesWithDeviceFilter]);
 
+  // עדכון נודים רק כשרשימת המכשירים משתנה
   useEffect(() => {
     setNodes(buildNodesFromData());
+  }, [setNodes, activeDeviceNodes]);
+
+  // עדכון קצוות כשמשתנה פילטר סטטוס, מכשיר, או VDOM - בלי לגעת בנודים
+  useEffect(() => {
     setEdges(buildEdgesWithDeviceFilter(statusFilter));
-  }, [statusFilter, selectedDeviceId, setEdges, setNodes, buildEdgesWithDeviceFilter, activeDeviceNodes]);
+  }, [statusFilter, selectedDeviceId, setEdges, buildEdgesWithDeviceFilter, scope.vdom]);
+
+  const dedupedTunnels = useMemo(() => {
+    const seen = new Set<string>();
+    return activeTunnels.filter((t) => {
+      const lo = Math.min(Number(t.source_device_id), Number(t.dest_device_id));
+      const hi = Math.max(Number(t.source_device_id), Number(t.dest_device_id));
+      const key = `${lo}-${hi}-${t.name}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [activeTunnels]);
 
   const visibleTunnels = selectedDeviceId
-    ? activeTunnels.filter((t) => t.source_device_id === selectedDeviceId || t.dest_device_id === selectedDeviceId)
-    : activeTunnels;
+    ? dedupedTunnels.filter((t) => t.source_device_id === selectedDeviceId || t.dest_device_id === selectedDeviceId)
+    : dedupedTunnels;
   const upCount = visibleTunnels.filter((t) => t.status === 'up').length;
   const downCount = visibleTunnels.filter((t) => t.status === 'down').length;
 
