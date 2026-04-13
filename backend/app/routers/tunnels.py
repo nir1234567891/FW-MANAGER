@@ -5,6 +5,7 @@ from sqlalchemy import select
 from app.database import get_db
 from app.services import tunnel_mapper
 from app.models import VPNTunnel, Device
+from app.schemas import TunnelDetail, TunnelSummary, TunnelDiscoveryResult
 
 router = APIRouter(prefix="/api/tunnels", tags=["tunnels"])
 
@@ -55,8 +56,9 @@ async def _tunnel_to_dict(t, db: AsyncSession) -> dict:
     }
 
 
-@router.get("")
+@router.get("", response_model=list[TunnelDetail])
 async def list_tunnels(db: AsyncSession = Depends(get_db)):
+    """List all VPN tunnels across all devices."""
     tunnels = await tunnel_mapper.get_all_tunnels(db)
     result = []
     for t in tunnels:
@@ -70,8 +72,9 @@ async def get_topology(db: AsyncSession = Depends(get_db)):
     return topology
 
 
-@router.post("/discover")
+@router.post("/discover", response_model=TunnelDiscoveryResult)
 async def discover_tunnels(db: AsyncSession = Depends(get_db)):
+    """Discover IPsec tunnels from all managed FortiGate devices."""
     try:
         result = await tunnel_mapper.discover_tunnels(db)
         return result
@@ -79,14 +82,16 @@ async def discover_tunnels(db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Tunnel discovery failed: {exc}")
 
 
-@router.get("/summary")
+@router.get("/summary", response_model=TunnelSummary)
 async def tunnel_summary(db: AsyncSession = Depends(get_db)):
+    """Get summary of tunnel status (total, up, down, health %)."""
     summary = await tunnel_mapper.get_tunnel_status_summary(db)
     return summary
 
 
-@router.get("/{device_id}")
+@router.get("/{device_id}", response_model=list[TunnelDetail])
 async def get_device_tunnels(device_id: int, db: AsyncSession = Depends(get_db)):
+    """Get all tunnels for a specific device."""
     tunnels = await tunnel_mapper.get_device_tunnels(db, device_id)
     result = []
     for t in tunnels:

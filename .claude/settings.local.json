@@ -3,7 +3,21 @@
     "allow": [
       "Bash(python run.py)",
       "Bash(npm run:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(claude mcp:*)",
+      "Bash(C:\\\\Users\\\\CHF867\\\\AppData\\\\Roaming\\\\Python\\\\Python314\\\\Scripts\\\\fortios-mcp.exe --help)",
+      "Bash(echo \"Exit code: $?\")",
+      "Bash(\"/c/Users/CHF867/AppData/Roaming/Python/Python314/Scripts/fortios-mcp.exe\" --help)",
+      "Bash(ls -la .claude*)",
+      "mcp__fgt-vdom1__vpn_ipsec_phase1_list",
+      "mcp__fgt-vdom1__vpn_ipsec_phase2_list",
+      "mcp__fgt-vdom1__monitor_vpn_ipsec",
+      "mcp__fgt-vdom1__firewall_policy_list",
+      "mcp__fgt-vdom1__system_interface_list",
+      "mcp__fgt-vdom1__system_status",
+      "mcp__fgt-vdom1__system_performance_status",
+      "mcp__fgt-vdom1__system_resource_usage",
+      "Bash(python -c ':*)"
     ]
   }
 }

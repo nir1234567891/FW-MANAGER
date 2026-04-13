@@ -42,33 +42,44 @@ async def discover_tunnels(db: AsyncSession) -> dict:
                     continue
 
                 for tdata in tunnels_data:
-                    tunnel_name = tdata.get("name", tdata.get("p2name", "unknown"))
-                    remote_gw = tdata.get("rgwy", tdata.get("remote_gateway", ""))
-                    phase1 = tdata.get("name", tdata.get("p1name", ""))
-                    phase2 = tdata.get("p2name", tdata.get("phase2", ""))
+                    # Phase 1 name is always in "name" field
+                    phase1 = tdata.get("name", "unknown")
+                    tunnel_name = phase1  # Use phase1 name as tunnel identifier
+
+                    # Remote gateway is in "rgwy" field (not "remote_gateway")
+                    remote_gw = tdata.get("rgwy", "")
 
                     # Extract proxy IDs from nested proxyid structure
                     proxyid = tdata.get("proxyid", [])
                     if proxyid and isinstance(proxyid, list):
+                        # Use first proxyid for tunnel status
                         pid = proxyid[0]
                         tun_status = "up" if pid.get("status", "") == "up" else "down"
                         incoming = int(pid.get("incoming_bytes", 0))
                         outgoing = int(pid.get("outgoing_bytes", 0))
-                        local_sub = pid.get("proxy_src", [{}])
-                        remote_sub = pid.get("proxy_dst", [{}])
-                        if not phase2:
-                            phase2 = pid.get("p2name", "")
+                        local_sub = pid.get("proxy_src", [])
+                        remote_sub = pid.get("proxy_dst", [])
+                        phase2 = pid.get("p2name", "")
                     else:
-                        tun_status = "up" if tdata.get("status", "") == "up" else "down"
+                        # No proxyid means tunnel is down/not established
+                        # NOTE: FortiGate monitor API has NO top-level "status" field!
+                        tun_status = "down"
                         incoming = int(tdata.get("incoming_bytes", 0))
                         outgoing = int(tdata.get("outgoing_bytes", 0))
-                        local_sub = tdata.get("proxy_src", [{}])
-                        remote_sub = tdata.get("proxy_dst", [{}])
+                        local_sub = []
+                        remote_sub = []
+                        phase2 = ""
 
-                    local_subnet = local_sub[0].get("subnet", "") if isinstance(local_sub, list) and local_sub else ""
-                    remote_subnet = remote_sub[0].get("subnet", "") if isinstance(remote_sub, list) and remote_sub else ""
+                    # Parse subnet strings from proxy_src/proxy_dst
+                    local_subnet = ""
+                    if local_sub and isinstance(local_sub, list) and len(local_sub) > 0:
+                        local_subnet = local_sub[0].get("subnet", "")
 
-                    # creation_time = שניות מאז שהטאנל עלה
+                    remote_subnet = ""
+                    if remote_sub and isinstance(remote_sub, list) and len(remote_sub) > 0:
+                        remote_subnet = remote_sub[0].get("subnet", "")
+
+                    # creation_time = seconds since tunnel came up
                     uptime_secs = int(tdata.get("creation_time", 0))
 
                     if tunnel_name in existing:

@@ -244,9 +244,21 @@ export default function TunnelMap() {
   function buildEdgesFromData(filter: string): Edge[] {
     const filtered = filter === 'all' ? activeTunnels : activeTunnels.filter((t) => t.status === filter);
 
+    // Guard: skip tunnels whose dest_device_id is empty (no matched peer in DB)
+    // or whose source/target node is not present in the current node list.
+    // React Flow throws undefined errors when an edge references a non-existent node.
+    const nodeIds = new Set(activeDeviceNodes.map((d) => d.id));
+    const validFiltered = filtered.filter(
+      (t) =>
+        t.dest_device_id &&
+        t.dest_device_id.trim() !== '' &&
+        nodeIds.has(t.source_device_id) &&
+        nodeIds.has(t.dest_device_id),
+    );
+
     // דדופליקציה: אם אותו טאנל קיים בשני הכיוונים (FW-A→FW-B ו-FW-B→FW-A) - מציגים רק אחד
     const seen = new Set<string>();
-    const deduped = filtered.filter((t) => {
+    const deduped = validFiltered.filter((t) => {
       const lo = Math.min(Number(t.source_device_id), Number(t.dest_device_id));
       const hi = Math.max(Number(t.source_device_id), Number(t.dest_device_id));
       const key = `${lo}-${hi}-${t.name}`;
@@ -330,7 +342,7 @@ export default function TunnelMap() {
       if (!t) return false;
       return t.source_device_id === selectedDeviceId || t.dest_device_id === selectedDeviceId;
     });
-  }, [selectedDeviceId, activeTunnels]);
+  }, [selectedDeviceId, activeTunnels, activeDeviceNodes]);
 
   const handleRefresh = useCallback(() => {
     setEdges(buildEdgesWithDeviceFilter(statusFilter));

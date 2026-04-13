@@ -69,7 +69,7 @@ export const tunnelService = {
   getTopology: () => api.get<TopologyData>('/tunnels/topology'),
   discover: () => api.post('/tunnels/discover'),
   getSummary: () => api.get('/tunnels/summary'),
-  getByDevice: (deviceId: string) => api.get<VPNTunnel[]>(`/tunnels/device/${deviceId}`),
+  getByDevice: (deviceId: string) => api.get<VPNTunnel[]>(`/tunnels/${deviceId}`),
 };
 
 export const monitoringService = {

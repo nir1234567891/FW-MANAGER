@@ -27,6 +27,7 @@ class Device(Base):
     vdom_list = Column(JSON, default=list)
     cpu_usage = Column(Float, default=0.0)
     memory_usage = Column(Float, default=0.0)
+    disk_usage = Column(Float, default=0.0)
     session_count = Column(Integer, default=0)
     uptime = Column(String(100), nullable=True)
     last_seen = Column(DateTime, nullable=True)
@@ -105,16 +106,46 @@ class Policy(Base):
     vdom_name = Column(String(100), default="root")
     policy_id = Column(Integer, nullable=False)
     name = Column(String(255), nullable=True)
-    srcintf = Column(String(255), nullable=True)
-    dstintf = Column(String(255), nullable=True)
-    srcaddr = Column(String(500), nullable=True)
-    dstaddr = Column(String(500), nullable=True)
+    uuid = Column(String(100), nullable=True)  # FortiGate UUID
+
+    # Interfaces - stored as JSON arrays of objects
+    srcintf = Column(JSON, default=list)  # [{"name": "port1", "q_origin_key": "port1"}]
+    dstintf = Column(JSON, default=list)
+
+    # Addresses - stored as JSON arrays of objects
+    srcaddr = Column(JSON, default=list)  # [{"name": "all", "q_origin_key": "all"}]
+    dstaddr = Column(JSON, default=list)
+    srcaddr6 = Column(JSON, default=list)  # IPv6 addresses
+    dstaddr6 = Column(JSON, default=list)
+
+    # Services - stored as JSON array of objects
+    service = Column(JSON, default=list)  # [{"name": "HTTP", "q_origin_key": "HTTP"}]
+
+    # Basic fields
     action = Column(String(20), default="accept")
-    service = Column(String(500), nullable=True)
     schedule = Column(String(100), default="always")
-    nat = Column(String(10), default="enable")
     status = Column(String(10), default="enable")
+
+    # NAT settings
+    nat = Column(String(10), default="disable")
+    ippool = Column(String(10), default="disable")
+    poolname = Column(JSON, default=list)  # NAT IP pools
+    natip = Column(String(50), default="0.0.0.0 0.0.0.0")
+
+    # Security profiles
+    utm_status = Column(String(10), default="disable")
+    inspection_mode = Column(String(20), default="flow")
+    av_profile = Column(String(100), default="")
+    webfilter_profile = Column(String(100), default="")
+    ips_sensor = Column(String(100), default="")
+    application_list = Column(String(100), default="")
+    ssl_ssh_profile = Column(String(100), default="")
+
+    # Logging
     logtraffic = Column(String(20), default="all")
+    logtraffic_start = Column(String(10), default="disable")
+
+    # Comments and metadata
     comments = Column(Text, nullable=True)
     hit_count = Column(Integer, default=0)
 
