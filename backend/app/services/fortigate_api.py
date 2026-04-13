@@ -81,6 +81,11 @@ class FortiGateAPI:
         return raw
 
     async def get_interfaces(self, vdom: Optional[str] = None) -> list[dict[str, Any]]:
+        """Get all interface configurations from CMDB.
+
+        Returns a list of interface dicts with full config (IP, type, status, etc.).
+        IP addresses are in "IP NETMASK" space-separated format.
+        """
         old_vdom = self.vdom
         if vdom:
             self.vdom = vdom
@@ -90,12 +95,69 @@ class FortiGateAPI:
         finally:
             self.vdom = old_vdom
 
+    async def get_interface_traffic_stats(self) -> dict[str, Any]:
+        """Get real-time interface traffic stats (bytes, packets, errors, link state).
+
+        Real FortiGate structure (verified 2026-04-13, FGR60F v7.2.8):
+          results = {
+            "wan1": { id, name, alias, mac, ip, mask, link, speed, duplex,
+                      tx_packets, rx_packets, tx_bytes, rx_bytes, tx_errors, rx_errors },
+            "internal1": { ... },
+            ...
+          }
+
+        IMPORTANT: Returns a DICT keyed by interface name (not a list).
+        IMPORTANT: Only returns physical-layer interfaces.
+        IMPORTANT: Returns EMPTY {} for VDOM-scoped tokens on non-root VDOMs.
+                   This method forces vdom=root for the request.
+        """
+        old_vdom = self.vdom
+        self.vdom = "root"
+        try:
+            result = await self._get("/api/v2/monitor/system/interface", params={"include_vlan": "true"})
+            return result.get("results", {})
+        finally:
+            self.vdom = old_vdom
+
     async def get_vdoms(self) -> list[dict[str, Any]]:
+        """Get list of all VDOMs from CMDB.
+
+        Real FortiGate structure (verified 2026-04-13):
+          results = [
+            { name, q_origin_key, "short-name", "vcluster-id", flag },
+            ...
+          ]
+
+        NOTE: Must query from root VDOM to see all VDOMs.
+        """
         old_vdom = self.vdom
         self.vdom = "root"
         try:
             result = await self._get("/api/v2/cmdb/system/vdom")
             return result.get("results", [])
+        finally:
+            self.vdom = old_vdom
+
+    async def get_vdom_settings(self, vdom: str) -> dict[str, Any]:
+        """Get system settings for a specific VDOM (opmode, ngfw-mode, etc.).
+
+        Real FortiGate structure (verified 2026-04-13):
+          results = {
+            opmode: "nat" | "transparent",
+            "ngfw-mode": "profile-based" | "policy-based",
+            "vdom-type": "traffic" | "admin",
+            status: "enable" | "disable",
+            comments: "",
+            ... (100+ GUI flags and other settings)
+          }
+
+        NOTE: This is a per-VDOM endpoint. Must set vdom param to query each.
+        """
+        old_vdom = self.vdom
+        self.vdom = vdom
+        try:
+            result = await self._get("/api/v2/cmdb/system/settings")
+            return result.get("results", {})
         finally:
             self.vdom = old_vdom
 
@@ -133,47 +195,36 @@ class FortiGateAPI:
         result = await self._get("/api/v2/monitor/system/ha-peer")
         return result.get("results", result)
 
-    async def get_system_performance(self) -> dict[str, Any]:
-        result = await self._get("/api/v2/monitor/system/performance/status")
-        return result.get("results", result)
-
     async def get_resource_usage(self) -> dict[str, Any]:
-        """Get resource usage with current CPU/mem/session percentages.
-        Returns dict with cpu, mem, session, disk etc. Each is a list
-        where [0]['current'] gives the current percentage value."""
+        """Get resource usage: CPU, memory, disk, sessions + historical trends.
+
+        Real FortiGate structure (verified 2026-04-13, FGR60F v7.2.8):
+          results.cpu     → [{current: int, historical: {1-min: {...}, ...}}]
+          results.mem     → same
+          results.disk    → same
+          results.session → same
+          results.session6, setuprate, setuprate6, disk_lograte,
+            faz_lograte, forticloud_lograte, faz_cloud_lograte → same
+
+        Each metric is an ARRAY (length 1). Use [0]["current"] for live value.
+        Each historical window has: values ([[ts_ms, val], ...]), min, max, average, start, end.
+        Windows: "1-min", "10-min", "30-min", "1-hour", "12-hour", "24-hour".
+        """
         result = await self._get("/api/v2/monitor/system/resource/usage")
         return result.get("results", {})
 
-    async def get_cpu_usage(self) -> float:
-        perf = await self.get_system_performance()
-        if isinstance(perf, dict):
-            cpu = perf.get("cpu", perf.get("CPU", {}))
-            if isinstance(cpu, dict):
-                if "idle" in cpu:
-                    return round(100.0 - float(cpu.get("idle", 100)), 1)
-                return float(cpu.get("cpu_usage", cpu.get("used", 0)))
-            return float(cpu) if cpu else 0.0
-        return 0.0
+    async def get_system_global(self) -> dict[str, Any]:
+        """Get system global settings (CMDB).
 
-    async def get_memory_usage(self) -> float:
-        perf = await self.get_system_performance()
-        if isinstance(perf, dict):
-            mem = perf.get("mem", perf.get("memory", {}))
-            if isinstance(mem, dict):
-                if "total" in mem and "used" in mem and mem["total"] > 0:
-                    return round(float(mem["used"]) / float(mem["total"]) * 100, 1)
-                return float(mem.get("mem_usage", mem.get("used", 0)))
-            return float(mem) if mem else 0.0
-        return 0.0
+        Real FortiGate structure (verified 2026-04-13):
+          results.hostname, results.alias, results["vdom-mode"],
+          results["admin-sport"], results.admintimeout, etc.
 
-    async def get_session_count(self) -> int:
-        perf = await self.get_system_performance()
-        if isinstance(perf, dict):
-            session = perf.get("session", {})
-            if isinstance(session, dict):
-                return int(session.get("current_sessions", session.get("total", 0)))
-            return int(session) if session else 0
-        return 0
+        NOTE: This is a CMDB endpoint — results is a flat dict, not a list.
+        The response also includes a 'revision' field on the envelope.
+        """
+        result = await self._get("/api/v2/cmdb/system/global")
+        return result.get("results", {})
 
     async def backup_config(self, vdom: Optional[str] = None, scope: str = "global") -> str:
         params: dict[str, Any] = {"scope": scope}
@@ -208,16 +259,6 @@ class FortiGateAPI:
     async def get_arp_table(self) -> list[dict[str, Any]]:
         result = await self._get("/api/v2/monitor/network/arp")
         return result.get("results", [])
-
-    async def get_sessions_count(self) -> int:
-        try:
-            result = await self._get("/api/v2/monitor/firewall/session/summary")
-            data = result.get("results", {})
-            if isinstance(data, dict):
-                return int(data.get("total", 0))
-        except Exception:
-            pass
-        return 0
 
     async def get_bgp_neighbors(self, vdom: Optional[str] = None) -> list[dict[str, Any]]:
         old_vdom = self.vdom
@@ -285,15 +326,12 @@ class FortiGateAPI:
         return f"{days} days {hours}:{mins:02d}:{secs:02d}"
 
     async def get_full_device_info(self) -> dict[str, Any]:
+        """Aggregate key device info in one call. Used for diagnostics."""
         info: dict[str, Any] = {}
         try:
             info["status"] = await self.get_system_status()
         except Exception as exc:
             info["status_error"] = str(exc)
-        try:
-            info["performance"] = await self.get_system_performance()
-        except Exception as exc:
-            info["performance_error"] = str(exc)
         try:
             info["resource_usage"] = await self.get_resource_usage()
         except Exception as exc:

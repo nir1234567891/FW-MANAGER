@@ -56,30 +56,38 @@ class IPsecTunnelStatus(BaseModel):
 # ============================================================================
 
 class IPsecPhase1Config(BaseModel):
-    """Phase 1 (IKE gateway) configuration.
+    """Phase 1 (IKE gateway) configuration from CMDB.
 
-    This is the CMDB config, not live status. Use IPsecTunnelStatus for status.
-    Only including fields commonly used - FortiGate has 150+ fields.
+    Real FortiGate structure (verified 2026-04-13, FGR60F v7.2.8):
+      /api/v2/cmdb/vpn.ipsec/phase1-interface → 150+ fields per entry.
+      Key fields extracted below. All have defaults for resilience.
+
+    Use IPsecTunnelStatus for live status (monitor API).
     """
     name: str
-    type: str  # "static" or "dialup"
-    interface: str
-    ike_version: str = Field(alias="ike-version")
-    local_gw: str = Field(alias="local-gw")
-    remote_gw: str = Field(alias="remote-gw")
-    remote_gw6: str = Field(alias="remote-gw6")
-    authmethod: str  # "psk" or "signature"
-    mode: str  # "main" or "aggressive"
-    peertype: str
-    keylife: int
-    proposal: str  # e.g., "aes256-sha256"
-    dhgrp: str  # e.g., "14 5"
-    nattraversal: str  # "enable" or "disable"
-    keepalive: int
-    dpd: str  # "on-demand", "on-idle", "disable"
-    dpd_retrycount: int = Field(alias="dpd-retrycount")
-    dpd_retryinterval: str = Field(alias="dpd-retryinterval")
-    comments: str
+    type: str = "static"  # "static" or "dialup"
+    interface: str = ""  # Bound interface (e.g., "vlan10-vdom1")
+    ike_version: str = Field(default="2", alias="ike-version")
+    local_gw: str = Field(default="0.0.0.0", alias="local-gw")
+    remote_gw: str = Field(default="0.0.0.0", alias="remote-gw")
+    remote_gw6: str = Field(default="::", alias="remote-gw6")
+    authmethod: str = "psk"  # "psk" or "signature"
+    mode: str = "main"  # "main" or "aggressive" (IKEv1 only)
+    peertype: str = "any"
+    keylife: int = 86400  # seconds
+    proposal: str = ""  # e.g., "aes256-sha256"
+    dhgrp: str = ""  # e.g., "14 5"
+    nattraversal: str = "enable"
+    keepalive: int = 10
+    dpd: str = "on-demand"  # "on-demand", "on-idle", "disable"
+    dpd_retrycount: int = Field(default=3, alias="dpd-retrycount")
+    dpd_retryinterval: str = Field(default="20", alias="dpd-retryinterval")
+    comments: str = ""
+    wizard_type: str = Field(default="custom", alias="wizard-type")
+    auto_negotiate: str = Field(default="enable", alias="auto-negotiate")
+    add_route: str = Field(default="enable", alias="add-route")
+    distance: int = 15
+    priority: int = 1
 
     class Config:
         populate_by_name = True
@@ -90,27 +98,34 @@ class IPsecPhase1Config(BaseModel):
 # ============================================================================
 
 class IPsecPhase2Config(BaseModel):
-    """Phase 2 (selector) configuration.
+    """Phase 2 (selector/child SA) configuration from CMDB.
 
-    This is the CMDB config. Use ProxyID for live status.
+    Real FortiGate structure (verified 2026-04-13, FGR60F v7.2.8):
+      /api/v2/cmdb/vpn.ipsec/phase2-interface → results = [{...}]
+
+    NOTE: src-subnet/dst-subnet use space-separated "IP MASK" format,
+          e.g., "0.0.0.0 0.0.0.0" (meaning all traffic).
     """
     name: str
-    phase1name: str
-    proposal: str
-    pfs: str  # "enable" or "disable"
-    dhgrp: str
-    replay: str
-    keepalive: str
-    keylifeseconds: int
-    keylifekbs: int
-    src_subnet: str = Field(alias="src-subnet")
-    dst_subnet: str = Field(alias="dst-subnet")
-    src_addr_type: str = Field(alias="src-addr-type")
-    dst_addr_type: str = Field(alias="dst-addr-type")
-    protocol: int
-    src_port: int = Field(alias="src-port")
-    dst_port: int = Field(alias="dst-port")
-    comments: str
+    phase1name: str = ""
+    proposal: str = ""  # e.g., "aes256-sha256"
+    pfs: str = "enable"
+    dhgrp: str = ""  # e.g., "14 5"
+    replay: str = "enable"
+    keepalive: str = "disable"
+    auto_negotiate: str = Field(default="enable", alias="auto-negotiate")
+    keylifeseconds: int = 43200
+    keylifekbs: int = 5120
+    keylife_type: str = Field(default="seconds", alias="keylife-type")
+    encapsulation: str = "tunnel-mode"  # "tunnel-mode" or "transport-mode"
+    src_subnet: str = Field(default="0.0.0.0 0.0.0.0", alias="src-subnet")
+    dst_subnet: str = Field(default="0.0.0.0 0.0.0.0", alias="dst-subnet")
+    src_addr_type: str = Field(default="subnet", alias="src-addr-type")
+    dst_addr_type: str = Field(default="subnet", alias="dst-addr-type")
+    protocol: int = 0
+    src_port: int = Field(default=0, alias="src-port")
+    dst_port: int = Field(default=0, alias="dst-port")
+    comments: str = ""
 
     class Config:
         populate_by_name = True
@@ -213,98 +228,101 @@ class PolicyObjectReference(BaseModel):
 class FirewallPolicyFull(BaseModel):
     """Complete IPv4 firewall policy structure from FortiGate.
 
-    This matches the REAL deeply nested structure from FortiGate API.
-    All fields with hyphens in FortiGate are converted to underscores in Python.
+    Real FortiGate structure (verified 2026-04-13, FGR60F v7.2.8):
+      /api/v2/cmdb/firewall/policy → results = [{ policyid, status, name, uuid, ... }]
+
+    All fields have defaults for resilience — FortiGate responses vary by firmware version.
     Arrays of objects (srcintf, dstintf, srcaddr, dstaddr, service) are preserved as lists.
     """
     policyid: int
-    q_origin_key: int
-    status: str  # "enable" or "disable"
-    name: str
-    uuid: str
-    uuid_idx: int = Field(alias="uuid-idx")
+    q_origin_key: int = 0
+    status: str = "enable"  # "enable" or "disable"
+    name: str = ""
+    uuid: str = ""
+    uuid_idx: int = Field(default=0, alias="uuid-idx")
 
     # Interfaces - ARRAYS of objects, not strings!
-    srcintf: list[PolicyObjectReference]
-    dstintf: list[PolicyObjectReference]
+    srcintf: list[PolicyObjectReference] = []
+    dstintf: list[PolicyObjectReference] = []
 
     # Basic action
-    action: str  # "accept" or "deny"
+    action: str = "accept"  # "accept" or "deny"
 
     # IPv4 Addresses - ARRAYS of objects
-    srcaddr: list[PolicyObjectReference]
-    dstaddr: list[PolicyObjectReference]
-    srcaddr_negate: str = Field(alias="srcaddr-negate")  # "enable" or "disable"
-    dstaddr_negate: str = Field(alias="dstaddr-negate")
+    srcaddr: list[PolicyObjectReference] = []
+    dstaddr: list[PolicyObjectReference] = []
+    srcaddr_negate: str = Field(default="disable", alias="srcaddr-negate")
+    dstaddr_negate: str = Field(default="disable", alias="dstaddr-negate")
 
     # IPv6 Addresses - ARRAYS (can be empty)
-    srcaddr6: list[PolicyObjectReference]
-    dstaddr6: list[PolicyObjectReference]
-    srcaddr6_negate: str = Field(alias="srcaddr6-negate")
-    dstaddr6_negate: str = Field(alias="dstaddr6-negate")
+    srcaddr6: list[PolicyObjectReference] = []
+    dstaddr6: list[PolicyObjectReference] = []
+    srcaddr6_negate: str = Field(default="disable", alias="srcaddr6-negate")
+    dstaddr6_negate: str = Field(default="disable", alias="dstaddr6-negate")
 
     # Services - ARRAY of objects
-    service: list[PolicyObjectReference]
-    service_negate: str = Field(alias="service-negate")
+    service: list[PolicyObjectReference] = []
+    service_negate: str = Field(default="disable", alias="service-negate")
 
     # Internet Service fields
-    internet_service: str = Field(alias="internet-service")  # "enable" or "disable"
-    internet_service_name: list[PolicyObjectReference] = Field(alias="internet-service-name")
-    internet_service_group: list[PolicyObjectReference] = Field(alias="internet-service-group")
-    internet_service_custom: list[PolicyObjectReference] = Field(alias="internet-service-custom")
-    internet_service_negate: str = Field(alias="internet-service-negate")
+    internet_service: str = Field(default="disable", alias="internet-service")
+    internet_service_name: list[PolicyObjectReference] = Field(default=[], alias="internet-service-name")
+    internet_service_group: list[PolicyObjectReference] = Field(default=[], alias="internet-service-group")
+    internet_service_custom: list[PolicyObjectReference] = Field(default=[], alias="internet-service-custom")
+    internet_service_negate: str = Field(default="disable", alias="internet-service-negate")
 
     # Schedule
-    schedule: str  # Schedule name, default "always"
-    schedule_timeout: str = Field(alias="schedule-timeout")
+    schedule: str = "always"
+    schedule_timeout: str = Field(default="disable", alias="schedule-timeout")
 
     # NAT settings
-    nat: str  # "enable" or "disable"
-    ippool: str  # "enable" or "disable"
-    poolname: list[PolicyObjectReference]  # NAT IP pools
-    poolname6: list[PolicyObjectReference]
-    natip: str  # NAT IP range like "0.0.0.0 0.0.0.0"
+    nat: str = "disable"
+    ippool: str = "disable"
+    poolname: list[PolicyObjectReference] = []
+    poolname6: list[PolicyObjectReference] = []
+    natip: str = "0.0.0.0 0.0.0.0"
 
     # UTM/Security Profiles
-    utm_status: str = Field(alias="utm-status")  # "enable" or "disable"
-    inspection_mode: str = Field(alias="inspection-mode")  # "flow" or "proxy"
-    profile_type: str = Field(alias="profile-type")  # "single" or "group"
-    profile_protocol_options: str = Field(alias="profile-protocol-options")
-    ssl_ssh_profile: str = Field(alias="ssl-ssh-profile")
-    av_profile: str = Field(alias="av-profile")
-    webfilter_profile: str = Field(alias="webfilter-profile")
-    dnsfilter_profile: str = Field(alias="dnsfilter-profile")
-    emailfilter_profile: str = Field(alias="emailfilter-profile")
-    dlp_profile: str = Field(alias="dlp-profile")
-    file_filter_profile: str = Field(alias="file-filter-profile")
-    ips_sensor: str = Field(alias="ips-sensor")
-    application_list: str = Field(alias="application-list")
-    voip_profile: str = Field(alias="voip-profile")
-    waf_profile: str = Field(alias="waf-profile")
-    ssh_filter_profile: str = Field(alias="ssh-filter-profile")
+    utm_status: str = Field(default="disable", alias="utm-status")
+    inspection_mode: str = Field(default="flow", alias="inspection-mode")
+    profile_type: str = Field(default="single", alias="profile-type")
+    profile_group: str = Field(default="", alias="profile-group")
+    profile_protocol_options: str = Field(default="default", alias="profile-protocol-options")
+    ssl_ssh_profile: str = Field(default="", alias="ssl-ssh-profile")
+    av_profile: str = Field(default="", alias="av-profile")
+    webfilter_profile: str = Field(default="", alias="webfilter-profile")
+    dnsfilter_profile: str = Field(default="", alias="dnsfilter-profile")
+    emailfilter_profile: str = Field(default="", alias="emailfilter-profile")
+    dlp_profile: str = Field(default="", alias="dlp-profile")
+    file_filter_profile: str = Field(default="", alias="file-filter-profile")
+    ips_sensor: str = Field(default="", alias="ips-sensor")
+    application_list: str = Field(default="", alias="application-list")
+    voip_profile: str = Field(default="", alias="voip-profile")
+    waf_profile: str = Field(default="", alias="waf-profile")
+    ssh_filter_profile: str = Field(default="", alias="ssh-filter-profile")
 
     # Logging
-    logtraffic: str  # "all", "utm", or "disable"
-    logtraffic_start: str = Field(alias="logtraffic-start")  # "enable" or "disable"
-    capture_packet: str = Field(alias="capture-packet")
+    logtraffic: str = "all"  # "all", "utm", or "disable"
+    logtraffic_start: str = Field(default="disable", alias="logtraffic-start")
+    capture_packet: str = Field(default="disable", alias="capture-packet")
 
     # Authentication
-    groups: list[PolicyObjectReference]
-    users: list[PolicyObjectReference]
-    fsso_groups: list[PolicyObjectReference] = Field(alias="fsso-groups")
+    groups: list[PolicyObjectReference] = []
+    users: list[PolicyObjectReference] = []
+    fsso_groups: list[PolicyObjectReference] = Field(default=[], alias="fsso-groups")
 
     # VPN
-    vpntunnel: str  # VPN tunnel name or empty
+    vpntunnel: str = ""
 
     # Comments and labels
-    comments: str
-    label: str
-    global_label: str = Field(alias="global-label")
+    comments: str = ""
+    label: str = ""
+    global_label: str = Field(default="", alias="global-label")
 
     # Advanced settings
-    auto_asic_offload: str = Field(alias="auto-asic-offload")
-    match_vip: str = Field(alias="match-vip")
-    match_vip_only: str = Field(alias="match-vip-only")
+    auto_asic_offload: str = Field(default="enable", alias="auto-asic-offload")
+    match_vip: str = Field(default="enable", alias="match-vip")
+    match_vip_only: str = Field(default="disable", alias="match-vip-only")
 
     class Config:
         populate_by_name = True
@@ -412,8 +430,8 @@ class InterfaceFull(BaseModel):
     allowaccess: str  # Space-separated: "ping https ssh"
 
     # Interface properties
-    status: str  # "up" or "down"
-    type: str  # "physical", "vlan", "loopback", "tunnel", "aggregate"
+    status: str  # "up" or "down" (admin status)
+    type: str  # "physical", "hard-switch", "switch", "tunnel", "vlan", "loopback", "aggregate", "redundant", "vdom-link"
     role: str = "undefined"  # "lan", "wan", "dmz", "undefined"
 
     # Physical properties
@@ -497,9 +515,11 @@ class InterfaceSimplified(BaseModel):
     vdom: str
     ip_address: str  # Just the IP part
     netmask: str  # Just the netmask part
-    status: str  # "up" or "down"
-    type: str
-    role: str
+    status: str  # "up" or "down" (admin status from CMDB)
+    type: str  # "physical", "hard-switch", "switch", "tunnel", "vlan", "loopback", "aggregate", "redundant", "vdom-link"
+    role: str  # "lan", "wan", "dmz", "undefined"
+    mode: str  # "static", "dhcp", "pppoe"
+    speed: str  # "auto", "1000full", etc. (from CMDB config, not link speed)
     macaddr: str
     mtu: int
     description: str
@@ -526,44 +546,311 @@ class InterfaceListResponse(BaseModel):
 
 
 class InterfaceStatistics(BaseModel):
-    """Interface statistics summary."""
+    """Interface count summary by type and admin status.
+
+    Real FortiGate types observed (verified 2026-04-13, FGR60F v7.2.8):
+      physical, hard-switch, switch, tunnel, vlan, loopback, aggregate, redundant, vdom-link
+    """
     total_interfaces: int
+    # By type
     physical: int
+    hard_switch: int  # "hard-switch" type (e.g., "internal" on FortiGateRugged)
     vlan: int
     tunnel: int
     loopback: int
+    aggregate: int
+    switch: int  # Software switch
+    other: int  # redundant, vdom-link, etc.
+    # By admin status
     up: int
     down: int
 
 
+class InterfaceTrafficStats(BaseModel):
+    """Real-time interface traffic stats from monitor/system/interface/select.
+
+    Real FortiGate structure (verified 2026-04-13, FGR60F v7.2.8):
+      results is a DICT keyed by interface name, each value:
+        { id, name, alias, mac, ip, mask, link, speed, duplex,
+          tx_packets, rx_packets, tx_bytes, rx_bytes, tx_errors, rx_errors }
+
+    NOTE: Only returns physical-layer interfaces.
+    NOTE: Returns EMPTY for VDOM-scoped tokens on non-root VDOMs.
+          Must query with vdom=root or use a global-admin token.
+    """
+    name: str
+    alias: str = ""
+    mac: str = ""
+    ip: str = ""  # IP from kernel (may be 0.0.0.0 for unnumbered)
+    mask: int = 0  # Prefix length (0 if no IP)
+    link: bool  # Physical link state (true=link detected)
+    speed: int  # Link speed in Mbps (0 if no link)
+    duplex: int  # 1=full-duplex, 0=half/none
+    tx_packets: int = 0
+    rx_packets: int = 0
+    tx_bytes: int = 0
+    rx_bytes: int = 0
+    tx_errors: int = 0
+    rx_errors: int = 0
+
+
+class InterfaceTrafficResponse(BaseModel):
+    """Response for interface traffic stats endpoint."""
+    device_id: int
+    device_name: str
+    vdom_note: str = "Traffic stats only available from root VDOM"
+    interfaces: list[InterfaceTrafficStats]
+
+
+# ============================================================================
+# VDOM Schemas (from /api/v2/cmdb/system/vdom + /api/v2/cmdb/system/settings)
+# ============================================================================
+
+class VDOMDetail(BaseModel):
+    """Enriched VDOM data combining two FortiGate endpoints.
+
+    Data sources (verified 2026-04-13, FGR60F v7.2.8):
+
+    1. /api/v2/cmdb/system/vdom → list of VDOMs:
+       { name, q_origin_key, "short-name", "vcluster-id", flag }
+
+    2. /api/v2/cmdb/system/settings (per VDOM) → VDOM settings:
+       { opmode: "nat"|"transparent",
+         "ngfw-mode": "profile-based"|"policy-based",
+         "vdom-type": "traffic"|"admin",
+         status: "enable"|"disable",
+         comments: "" }
+
+    NOTE: opmode and ngfw-mode are in system/settings, NOT in system/vdom.
+    """
+    name: str
+    short_name: str = ""  # Display name (usually same as name)
+    vdom_type: str = "traffic"  # "traffic" or "admin"
+    opmode: str = "nat"  # "nat" or "transparent"
+    ngfw_mode: str = "profile-based"  # "profile-based" or "policy-based"
+    status: str = "enable"  # "enable" or "disable"
+    vcluster_id: int = 0  # HA virtual cluster ID
+    comments: str = ""
+    # Counted from other endpoints:
+    interface_count: int = 0
+    policy_count: int = 0
+
+
+class VDOMListResponse(BaseModel):
+    """Response for VDOM list endpoint."""
+    device_id: int
+    device_name: str
+    vdom_count: int
+    vdoms: list[VDOMDetail]
+
+
+# ============================================================================
+# Routing Schemas (from /api/v2/monitor/router/ipv4, bgp/neighbors, ospf/neighbors)
+# ============================================================================
+
+class ActiveRoute(BaseModel):
+    """Single route from the active routing table (FIB).
+
+    Real FortiGate structure (verified 2026-04-13, FGR60F v7.2.8):
+      /api/v2/monitor/router/ipv4 → results = [
+        { ip_version, type, ip_mask, distance, metric, priority, vrf,
+          gateway, non_rc_gateway, interface,
+          ?is_tunnel_route, ?tunnel_parent, ?install_date }
+      ]
+
+    Types observed: "connect", "static", "bgp", "ospf", "rip", "isis", "kernel"
+    """
+    ip_version: int = 4
+    type: str  # "connect", "static", "bgp", "ospf", "rip", etc.
+    ip_mask: str  # CIDR notation: "10.0.10.0/30"
+    distance: int = 0  # Administrative distance
+    metric: int = 0
+    priority: int = 0
+    vrf: int = 0
+    gateway: str = "0.0.0.0"  # Next hop (0.0.0.0 for connected)
+    non_rc_gateway: str = "0.0.0.0"  # Non-recursive gateway
+    interface: str = ""  # Outgoing interface name
+    # Optional fields (present only on some routes):
+    is_tunnel_route: bool = False
+    tunnel_parent: str = ""
+    install_date: Optional[int] = None  # Unix timestamp (seconds), only dynamic routes
+
+
+class BGPNeighborStatus(BaseModel):
+    """Live BGP neighbor status from monitor API.
+
+    Real FortiGate structure (verified 2026-04-13):
+      /api/v2/monitor/router/bgp/neighbors → results = [
+        { neighbor_ip, local_ip, remote_as, admin_status, state, type }
+      ]
+
+    States: "Idle", "Connect", "Active", "OpenSent", "OpenConfirm", "Established"
+    """
+    neighbor_ip: str
+    local_ip: str = ""
+    remote_as: int
+    admin_status: bool = True
+    state: str  # "Established", "Active", "Idle", etc.
+    type: str = "ipv4"  # "ipv4" or "ipv6"
+
+
+class BGPConfig(BaseModel):
+    """BGP configuration summary from CMDB.
+
+    Real FortiGate structure (verified 2026-04-13):
+      /api/v2/cmdb/router/bgp → results = {
+        as, "router-id", "keepalive-timer", "holdtime-timer",
+        neighbor: [{ip, "remote-as", "update-source", ...}],
+        network: [{id, prefix, ...}],
+        redistribute: [{name, status, ...}]
+      }
+    """
+    local_as: str = ""  # Local ASN (string, FortiGate returns it as string)
+    router_id: str = ""
+    keepalive_timer: int = 60
+    holdtime_timer: int = 180
+    neighbor_count: int = 0
+    network_count: int = 0
+    neighbors_configured: list[dict] = []  # Simplified neighbor list
+
+
+class OSPFNeighborStatus(BaseModel):
+    """Live OSPF neighbor status from monitor API.
+
+    Real FortiGate structure (verified 2026-04-13):
+      /api/v2/monitor/router/ospf/neighbors → results = [
+        { neighbor_ip, router_id, state, priority }
+      ]
+
+    States: "Full", "2-Way", "Init", "Down", "ExStart", "Exchange", "Loading"
+    """
+    neighbor_ip: str
+    router_id: str = ""
+    state: str  # "Full", "2-Way", "Down", etc.
+    priority: int = 1
+
+
+class RoutingSummary(BaseModel):
+    """Routing table summary for a device/VDOM."""
+    device_id: int
+    device_name: str
+    vdom: str
+    total_routes: int
+    by_type: dict[str, int]  # {"connect": 3, "bgp": 1, "static": 1, ...}
+    total_routes_ipv4: int = 0
+    total_routes_ipv6: int = 0
+
+
+class RouteListResponse(BaseModel):
+    """Response for route list endpoint."""
+    device_id: int
+    device_name: str
+    vdom: str
+    total: int
+    routes: list[ActiveRoute]
+
+
+class BGPStatusResponse(BaseModel):
+    """Response for BGP status endpoint."""
+    device_id: int
+    device_name: str
+    vdom: str
+    config: BGPConfig
+    neighbors: list[BGPNeighborStatus]
+
+
+class OSPFStatusResponse(BaseModel):
+    """Response for OSPF status endpoint."""
+    device_id: int
+    device_name: str
+    vdom: str
+    neighbors: list[OSPFNeighborStatus]
+
+
+# ============================================================================
+# System Status Schemas (from /api/v2/monitor/system/status)
+# ============================================================================
+
+class SystemStatusResult(BaseModel):
+    """System identity from monitor/system/status.
+
+    Real FortiGate response (verified 2026-04-13 against FGR60F v7.2.8):
+      results: { model_name, model_number, model, hostname, log_disk_status }
+      envelope: serial, version, build  (merged into results by get_system_status())
+    """
+    model_name: str = ""       # e.g. "FortiGateRugged"
+    model_number: str = ""     # e.g. "60F"
+    model: str = ""            # Model code e.g. "FGR60F"
+    hostname: str = ""         # e.g. "FGT-1"
+    log_disk_status: str = ""  # "available" or "not_available"
+    # Merged from envelope by get_system_status():
+    serial: str = ""           # e.g. "FGR60FTK25003110"
+    version: str = ""          # e.g. "v7.2.8"
+    build: int = 0             # e.g. 1639
+
+
 # ============================================================================
 # Dashboard / Device Health Schemas
+# (from /api/v2/monitor/system/resource/usage)
 # ============================================================================
 
 class ResourceDataPoint(BaseModel):
     """Single data point from FortiGate historical resource usage.
 
     FortiGate returns history as [[timestamp_ms, value], ...] pairs.
-    timestamp is Unix milliseconds, value is a percentage or count.
+    The router's parse function converts these to {timestamp, value} objects.
     """
     timestamp: int  # Unix milliseconds
     value: int      # Percentage (0-100) or raw count
 
 
-class ResourceMetricHistory(BaseModel):
-    """Complete data for one resource metric (CPU, memory, disk, sessions).
+class ResourceTimeWindow(BaseModel):
+    """One historical time window from FortiGate resource/usage.
 
-    Real FortiGate structure from monitor/system/resource/usage:
-      results.cpu[0].current = 0        ← live percentage
-      results.cpu[0].historical["1-min"].values = [[ts_ms, val], ...]
-      results.cpu[0].historical["1-min"].min/max/average = int
+    Real FortiGate structure (verified 2026-04-13):
+      historical["1-hour"] = {
+        "values": [[1776085401000, 0], [1776085221000, 5], ...],  ← ~20 samples
+        "max": 10, "min": 3, "average": 7,
+        "start": 1776081981000, "end": 1776085566000
+      }
+
+    FortiGate provides 6 windows with different granularities:
+      "1-min"   → ~20 samples at  3-second intervals
+      "10-min"  → ~20 samples at 30-second intervals
+      "30-min"  → ~20 samples at 90-second intervals
+      "1-hour"  → ~20 samples at  3-minute intervals
+      "12-hour" → ~20 samples at 36-minute intervals
+      "24-hour" → ~20 samples at 72-minute intervals
     """
-    current: int = 0                          # Live percentage or count
-    min_1hour: int = 0                        # Min over last hour window
-    max_1hour: int = 0                        # Max over last hour window
-    avg_1hour: int = 0                        # Average over last hour window
-    history_1min: list[ResourceDataPoint] = []    # ~20 samples, 3-sec granularity
-    history_1hour: list[ResourceDataPoint] = []   # ~20 samples, 3-min granularity
+    values: list[ResourceDataPoint] = []
+    min: int = 0
+    max: int = 0
+    average: int = 0
+    start: int = 0   # Unix milliseconds — window start
+    end: int = 0     # Unix milliseconds — window end
+
+
+class ResourceMetric(BaseModel):
+    """Single resource metric from FortiGate resource/usage.
+
+    Real FortiGate structure (verified 2026-04-13):
+      results.cpu = [{
+        "current": 0,
+        "historical": {
+          "1-min":   { values, min, max, average, start, end },
+          "10-min":  { ... },
+          "30-min":  { ... },
+          "1-hour":  { ... },
+          "12-hour": { ... },
+          "24-hour": { ... }
+        }
+      }]
+
+    FortiGate wraps each metric in an array (always length 1 for non-HA).
+    This schema represents the INNER element after extracting [0].
+    """
+    current: int = 0
+    historical: dict[str, ResourceTimeWindow] = {}
 
 
 class DeviceDashboard(BaseModel):
@@ -594,8 +881,9 @@ class DeviceDashboard(BaseModel):
     disk_usage: float
     session_count: int
 
-    # Historical trends for charts — same structure as resource/usage historical data
-    cpu: ResourceMetricHistory
-    memory: ResourceMetricHistory
-    disk: ResourceMetricHistory
-    sessions: ResourceMetricHistory
+    # Full resource metrics with all 6 historical windows
+    # Keys in .historical: "1-min", "10-min", "30-min", "1-hour", "12-hour", "24-hour"
+    cpu: ResourceMetric
+    memory: ResourceMetric
+    disk: ResourceMetric
+    sessions: ResourceMetric

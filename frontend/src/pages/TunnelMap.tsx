@@ -218,13 +218,22 @@ export default function TunnelMap() {
     }
   }, [loadData]);
 
-  // Use real data if loaded, fall back to mock
-  const activeDeviceNodes = realDeviceNodes.length > 0 ? realDeviceNodes : deviceNodeData;
-  const allTunnels = dataLoaded && realTunnels.length > 0 ? realTunnels : mockTunnels;
+  // Use real data if loaded, fall back to mock — MUST be memoized to prevent infinite re-renders
+  const activeDeviceNodes = useMemo(
+    () => realDeviceNodes.length > 0 ? realDeviceNodes : deviceNodeData,
+    [realDeviceNodes, deviceNodeData]
+  );
+  const allTunnels = useMemo(
+    () => dataLoaded && realTunnels.length > 0 ? realTunnels : mockTunnels,
+    [dataLoaded, realTunnels, mockTunnels]
+  );
   // סינון לפי VDOM שנבחר ב-scope הגלובלי
-  const activeTunnels = scope.vdom === 'all'
-    ? allTunnels
-    : allTunnels.filter((t) => t.vdom_name === scope.vdom);
+  const activeTunnels = useMemo(
+    () => scope.vdom === 'all'
+      ? allTunnels
+      : allTunnels.filter((t) => t.vdom_name === scope.vdom),
+    [scope.vdom, allTunnels]
+  );
 
   function buildNodesFromData(): Node[] {
     const count = activeDeviceNodes.length;

@@ -34,6 +34,9 @@ async def discover_tunnels(db: AsyncSession) -> dict:
             existing_result = await db.execute(existing_stmt)
             existing = {t.tunnel_name: t for t in existing_result.scalars().all()}
 
+            # Track which tunnels we see from FortiGate (to detect deletions)
+            seen_tunnel_names: set[str] = set()
+
             for vdom_name in vdom_list:
                 try:
                     tunnels_data = await api.get_vpn_tunnels(vdom=vdom_name)
@@ -45,6 +48,7 @@ async def discover_tunnels(db: AsyncSession) -> dict:
                     # Phase 1 name is always in "name" field
                     phase1 = tdata.get("name", "unknown")
                     tunnel_name = phase1  # Use phase1 name as tunnel identifier
+                    seen_tunnel_names.add(tunnel_name)
 
                     # Remote gateway is in "rgwy" field (not "remote_gateway")
                     remote_gw = tdata.get("rgwy", "")
@@ -113,6 +117,12 @@ async def discover_tunnels(db: AsyncSession) -> dict:
                         db.add(tunnel)
                         discovered += 1
 
+            # Remove tunnels from DB that no longer exist on the device
+            for tname, tunnel in existing.items():
+                if tname not in seen_tunnel_names:
+                    await db.delete(tunnel)
+                    logger.info("Removed stale tunnel '%s' from device '%s'", tname, device.name)
+
         except Exception as exc:
             logger.error("Tunnel discovery failed for %s: %s", device.name, exc)
             errors.append({"device": device.name, "error": str(exc)})
@@ -128,17 +138,48 @@ async def discover_tunnels(db: AsyncSession) -> dict:
 
 
 async def map_tunnel_endpoints(db: AsyncSession) -> int:
+    """Map tunnel remote endpoints to known devices.
+
+    Uses 4 methods in priority order:
+      1. Direct management IP match (rgwy == device.ip_address)
+      2. Interface IP match (rgwy matches any configured interface IP on a device)
+      3. Same tunnel name on different devices
+      4. Reverse tunnel match (other device has tunnel pointing back to us)
+
+    Method 2 is critical because tunnel endpoints (rgwy) are almost never
+    the same as the management IP used to register the device.
+    """
     device_result = await db.execute(select(Device))
     devices = list(device_result.scalars().all())
     ip_to_device = {d.ip_address: d for d in devices}
 
+    # Build extended IP-to-device map: query ALL interface IPs from each device
+    # This catches tunnel endpoint IPs that differ from management IP
+    extended_ip_map: dict[str, Device] = dict(ip_to_device)
+    for device in devices:
+        try:
+            api = FortiGateAPI(host=device.ip_address, port=device.port, api_key=device.api_key)
+            vdom_list = device.vdom_list if device.vdom_list else ["root"]
+            for vdom_name in vdom_list:
+                try:
+                    ifaces = await api.get_interfaces(vdom=vdom_name)
+                    for iface in ifaces:
+                        ip_field = iface.get("ip", "0.0.0.0 0.0.0.0")
+                        if ip_field and ip_field != "0.0.0.0 0.0.0.0":
+                            ip_addr = ip_field.split()[0]
+                            if ip_addr != "0.0.0.0" and ip_addr not in extended_ip_map:
+                                extended_ip_map[ip_addr] = device
+                except Exception:
+                    continue
+        except Exception:
+            continue
+
+    logger.info("Extended IP map: %d IPs across %d devices", len(extended_ip_map), len(devices))
+
     tunnel_result = await db.execute(select(VPNTunnel))
     tunnels = list(tunnel_result.scalars().all())
 
-    # Build reverse lookup: which device owns which remote_gateway IP
-    # If device A has tunnel with rgwy=10.0.10.2, and device B has tunnel
-    # with rgwy pointing to device A's subnet, they are connected.
-    # Also: group tunnels by device to find cross-device tunnel pairs.
+    # Group tunnels by device for cross-device matching
     device_tunnels: dict[int, list[VPNTunnel]] = {}
     for t in tunnels:
         device_tunnels.setdefault(t.device_id, []).append(t)
@@ -148,11 +189,14 @@ async def map_tunnel_endpoints(db: AsyncSession) -> int:
         if tunnel.remote_device_id:
             continue  # already mapped
 
-        # Method 1: Direct IP match (management IP)
-        if tunnel.remote_gateway and tunnel.remote_gateway in ip_to_device:
-            tunnel.remote_device_id = ip_to_device[tunnel.remote_gateway].id
-            mapped += 1
-            continue
+        # Method 1+2: Match rgwy against management IP AND all interface IPs
+        if tunnel.remote_gateway and tunnel.remote_gateway in extended_ip_map:
+            target_device = extended_ip_map[tunnel.remote_gateway]
+            # Don't map to self
+            if target_device.id != tunnel.device_id:
+                tunnel.remote_device_id = target_device.id
+                mapped += 1
+                continue
 
         # Method 2: Match by same tunnel name on different devices
         # (e.g. both FW-A and FW-B have "tun-vdom1" = they're connected)
@@ -240,8 +284,14 @@ async def build_topology(db: AsyncSession) -> dict:
             },
         })
 
+    device_ids = {d.id for d in devices}
+
     for tunnel in tunnels:
         if not tunnel.remote_device_id:
+            continue
+
+        # Skip edges where either device no longer exists
+        if tunnel.device_id not in device_ids or tunnel.remote_device_id not in device_ids:
             continue
 
         # Deduplicate by normalized device pair + tunnel name

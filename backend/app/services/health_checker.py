@@ -15,66 +15,75 @@ async def check_device_health(device: Device):
     api = FortiGateAPI(host=device.ip_address, port=device.port, api_key=device.api_key)
 
     try:
-        # Try to get system status
+        # --- System Status (serial, version, model, hostname) ---
+        # Real response: results = { model_name, model_number, model, hostname, log_disk_status }
+        # Envelope: serial, version, build (merged by get_system_status).
+        # NOTE: There is NO 'uptime' field in system/status. Uptime comes from web-ui/state.
         status_data = await api.get_system_status()
 
-        # Device is online
         device.status = "online"
         device.last_seen = datetime.now(timezone.utc)
 
-        # Update basic info
         if status_data.get("serial"):
             device.serial_number = status_data["serial"]
         if status_data.get("version"):
             device.firmware_version = status_data["version"]
-        if status_data.get("model"):
-            device.model = status_data["model"]
         if status_data.get("hostname"):
             device.hostname = status_data["hostname"]
-        if status_data.get("uptime"):
-            device.uptime = status_data["uptime"]
 
-        # Refresh VDOM list
+        # Build friendly model name: "FortiGateRugged 60F" (not just code "FGR60F")
+        model_name = status_data.get("model_name", "")
+        model_number = status_data.get("model_number", "")
+        model_code = status_data.get("model", "")
+        if model_name and model_number:
+            device.model = f"{model_name} {model_number}"
+        elif model_name:
+            device.model = model_name
+        elif model_code:
+            device.model = model_code
+
+        # --- VDOM list ---
         try:
             vdoms = await api.get_vdoms()
             vdom_names = [v.get("name", "root") for v in vdoms]
             if vdom_names and vdom_names != device.vdom_list:
                 device.vdom_list = vdom_names
-                logger.info(f"Updated VDOMs for {device.name}: {vdom_names}")
+                logger.info("Updated VDOMs for %s: %s", device.name, vdom_names)
         except Exception as e:
-            logger.debug(f"Could not refresh VDOMs for {device.name}: {e}")
+            logger.debug("Could not refresh VDOMs for %s: %s", device.name, e)
 
-        # Try to get resource usage
+        # --- Resource Usage (CPU, memory, disk, sessions) ---
+        # Single source of truth: monitor/system/resource/usage
+        # Real structure: results.cpu = [{"current": 0, "historical": {...}}]
         try:
             resource = await api.get_resource_usage()
             if isinstance(resource, dict):
-                cpu_val = _extract_current(resource.get("cpu"))
-                mem_val = _extract_current(resource.get("mem"))
-                sess_val = _extract_current(resource.get("session"))
-                device.cpu_usage = float(cpu_val)
-                device.memory_usage = float(mem_val)
-                device.session_count = sess_val
+                device.cpu_usage = float(_extract_current(resource.get("cpu")))
+                device.memory_usage = float(_extract_current(resource.get("mem")))
+                device.disk_usage = float(_extract_current(resource.get("disk")))
+                device.session_count = _extract_current(resource.get("session"))
         except Exception as e:
-            logger.debug(f"Could not fetch resource usage for {device.name}: {e}")
+            logger.debug("Could not fetch resource usage for %s: %s", device.name, e)
 
-        # Try to get uptime
+        # --- Uptime (from web-ui/state, NOT system/status) ---
         try:
             uptime_secs = await api.get_uptime_seconds()
             if uptime_secs > 0:
                 device.uptime = api.format_uptime(uptime_secs)
         except Exception as e:
-            logger.debug(f"Could not fetch uptime for {device.name}: {e}")
+            logger.debug("Could not fetch uptime for %s: %s", device.name, e)
 
-        logger.info(f"[OK] Device {device.name} is ONLINE")
+        logger.info("[OK] Device %s is ONLINE", device.name)
 
     except Exception as e:
-        # Device is offline - clear stale metrics
+        # Device is offline — clear stale metrics
         device.status = "offline"
         device.cpu_usage = 0
         device.memory_usage = 0
+        device.disk_usage = 0
         device.session_count = 0
         device.uptime = "0 days"
-        logger.warning(f"[FAIL] Device {device.name} is OFFLINE: {e}")
+        logger.warning("[FAIL] Device %s is OFFLINE: %s", device.name, e)
 
 
 def _extract_current(resource_list) -> int:
