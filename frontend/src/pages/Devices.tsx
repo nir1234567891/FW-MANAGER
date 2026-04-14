@@ -1,14 +1,14 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Search, Plus, LayoutGrid, List, RefreshCw, Download, Eye, Trash2,
-  Server, X, Cpu, MemoryStick, HardDrive, Network, Shield, ChevronRight, Terminal, ExternalLink,
+  Server, X, Cpu, MemoryStick, HardDrive, Network, Terminal, ExternalLink,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import DeviceCard from '@/components/DeviceCard';
 import StatusBadge from '@/components/StatusBadge';
 import Modal from '@/components/Modal';
-import type { Device, VDOM, DeviceInterface } from '@/types';
+import type { Device, DeviceInterface } from '@/types';
 import { formatDistanceToNow } from 'date-fns';
 import {
   AreaChart, Area, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -17,27 +17,6 @@ import { useScope } from '@/hooks/useScope';
 import { deviceService } from '@/services/api';
 import { mapBackendDevice } from '@/utils/mapDevice';
 
-const initialDevices: Device[] = [
-  { id: '1', name: 'FG-HQ-DC1', ip_address: '10.0.1.1', port: 443, api_key: 'tk-xxxx-1', hostname: 'FG-HQ-DC1', model: 'FortiGate 600E', firmware: 'v7.4.3', serial_number: 'FG6H0E1234560001', status: 'online', cpu_usage: 45, memory_usage: 62, disk_usage: 38, session_count: 15420, uptime: 8640000, vdom_count: 3, last_seen: new Date().toISOString(), notes: 'Primary DC firewall', created_at: '2024-01-15T00:00:00Z', updated_at: new Date().toISOString() },
-  { id: '2', name: 'FG-HQ-DC2', ip_address: '10.0.1.2', port: 443, api_key: 'tk-xxxx-2', hostname: 'FG-HQ-DC2', model: 'FortiGate 600E', firmware: 'v7.4.3', serial_number: 'FG6H0E1234560002', status: 'online', cpu_usage: 38, memory_usage: 55, disk_usage: 42, session_count: 12830, uptime: 8640000, vdom_count: 3, last_seen: new Date().toISOString(), notes: 'Secondary DC firewall (HA pair)', created_at: '2024-01-15T00:00:00Z', updated_at: new Date().toISOString() },
-  { id: '3', name: 'FG-BRANCH-NYC', ip_address: '10.1.1.1', port: 443, api_key: 'tk-xxxx-3', hostname: 'FG-BRANCH-NYC', model: 'FortiGate 200F', firmware: 'v7.4.2', serial_number: 'FG2H0F1234560003', status: 'online', cpu_usage: 22, memory_usage: 41, disk_usage: 25, session_count: 3240, uptime: 2592000, vdom_count: 1, last_seen: new Date().toISOString(), notes: 'New York branch office', created_at: '2024-03-10T00:00:00Z', updated_at: new Date().toISOString() },
-  { id: '4', name: 'FG-BRANCH-LON', ip_address: '10.2.1.1', port: 443, api_key: 'tk-xxxx-4', hostname: 'FG-BRANCH-LON', model: 'FortiGate 200F', firmware: 'v7.4.2', serial_number: 'FG2H0F1234560004', status: 'online', cpu_usage: 31, memory_usage: 48, disk_usage: 30, session_count: 2890, uptime: 1728000, vdom_count: 1, last_seen: new Date().toISOString(), notes: 'London branch office', created_at: '2024-03-12T00:00:00Z', updated_at: new Date().toISOString() },
-  { id: '5', name: 'FG-BRANCH-TKY', ip_address: '10.3.1.1', port: 443, api_key: 'tk-xxxx-5', hostname: 'FG-BRANCH-TKY', model: 'FortiGate 100F', firmware: 'v7.4.1', serial_number: 'FG1H0F1234560005', status: 'offline', cpu_usage: 0, memory_usage: 0, disk_usage: 45, session_count: 0, uptime: 0, vdom_count: 1, last_seen: new Date(Date.now() - 3600000).toISOString(), notes: 'Tokyo branch - unreachable', created_at: '2024-06-01T00:00:00Z', updated_at: new Date(Date.now() - 3600000).toISOString() },
-  { id: '6', name: 'FG-BRANCH-SYD', ip_address: '10.4.1.1', port: 443, api_key: 'tk-xxxx-6', hostname: 'FG-BRANCH-SYD', model: 'FortiGate 100F', firmware: 'v7.2.8', serial_number: 'FG1H0F1234560006', status: 'warning', cpu_usage: 87, memory_usage: 91, disk_usage: 78, session_count: 4200, uptime: 604800, vdom_count: 1, last_seen: new Date().toISOString(), notes: 'Sydney - high resource usage', created_at: '2024-06-15T00:00:00Z', updated_at: new Date().toISOString() },
-];
-
-const mockVdoms: Record<string, VDOM[]> = {
-  '1': [
-    { name: 'root', status: 'enabled', type: 'traffic', policy_count: 42, interface_count: 8 },
-    { name: 'DMZ', status: 'enabled', type: 'traffic', policy_count: 18, interface_count: 4 },
-    { name: 'Guest', status: 'enabled', type: 'traffic', policy_count: 6, interface_count: 2 },
-  ],
-  '2': [
-    { name: 'root', status: 'enabled', type: 'traffic', policy_count: 42, interface_count: 8 },
-    { name: 'DMZ', status: 'enabled', type: 'traffic', policy_count: 18, interface_count: 4 },
-    { name: 'Guest', status: 'enabled', type: 'traffic', policy_count: 6, interface_count: 2 },
-  ],
-};
 
 const mockInterfaces: DeviceInterface[] = [
   { name: 'port1', ip: '10.0.1.1/24', status: 'up', speed: '10Gbps', type: 'physical', vdom: 'root', rx_bytes: 1284901200, tx_bytes: 982340100 },
@@ -83,7 +62,7 @@ function formatUptime(seconds: number): string {
 export default function Devices() {
   const { scope, setDeviceId } = useScope();
   const navigate = useNavigate();
-  const [devices, setDevices] = useState<Device[]>(initialDevices);
+  const [devices, setDevices] = useState<Device[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
@@ -112,7 +91,6 @@ export default function Devices() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Real data for device detail panel
-  const [detailVdoms, setDetailVdoms] = useState<VDOM[]>([]);
   const [detailInterfaces, setDetailInterfaces] = useState<DeviceInterface[]>([]);
   const [detailPerfData, setDetailPerfData] = useState<{ time: string; cpu: number; memory: number }[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -125,19 +103,28 @@ export default function Devices() {
     keyPath: '',
   });
 
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(true);
+
+  // Track which device's interfaces were last fetched — prevents re-fetching
+  // when only metrics are refreshed (same device, new object reference).
+  const lastFetchedDeviceId = useRef<string | null>(null);
 
   const loadDevices = async () => {
     try {
       setIsRefreshing(true);
       const res = await deviceService.getAll();
-      if (Array.isArray(res.data) && res.data.length > 0) {
+      if (Array.isArray(res.data)) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const mapped = (res.data as any[]).map(mapBackendDevice);
-        setDevices(mapped);
+        const newDevices = (res.data as any[]).map(mapBackendDevice);
+        setDevices(newDevices);
+        // Keep detail panel in sync without re-fetching interfaces
+        setDetailDevice((prev) => {
+          if (!prev) return prev;
+          return newDevices.find((d) => d.id === prev.id) ?? prev;
+        });
       }
     } catch {
-      // backend unavailable - keep mock data
+      // backend unavailable
     } finally {
       setIsRefreshing(false);
     }
@@ -147,37 +134,24 @@ export default function Devices() {
     loadDevices();
   }, []);
 
-  // Fetch real VDOMs, interfaces, performance when detail panel opens
+  // Fetch interfaces + performance when a NEW device detail panel is opened.
+  // Skip re-fetch when only metrics (cpu/mem) change on the same device.
   useEffect(() => {
-    if (!detailDevice) return;
+    if (!detailDevice) {
+      // Panel closed — reset so next open always fetches fresh data
+      lastFetchedDeviceId.current = null;
+      return;
+    }
     const devId = String(detailDevice.id);
+    // Same device as last fetch → only metrics changed, skip interface re-fetch
+    if (lastFetchedDeviceId.current === devId) return;
+    lastFetchedDeviceId.current = devId;
+
     setDetailLoading(true);
     Promise.allSettled([
-      deviceService.getVdoms(devId),
       deviceService.getInterfaces(devId),
       deviceService.getPerformance(devId),
-    ]).then(([vdomRes, ifaceRes, perfRes]) => {
-      // VDOMs
-      if (vdomRes.status === 'fulfilled') {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const data = vdomRes.value.data as any;
-        const vdoms = data?.vdoms ?? data;
-        if (Array.isArray(vdoms) && vdoms.length > 0) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          setDetailVdoms(vdoms.map((v: any) => ({
-            name: v.name || 'root',
-            status: v.status || 'enabled',
-            type: v.mode || 'traffic',
-            policy_count: v.policy_count || 0,
-            interface_count: v.interface_count || 0,
-          })));
-        } else {
-          setDetailVdoms(mockVdoms[devId] || [{ name: 'root', status: 'enabled', type: 'traffic', policy_count: 0, interface_count: 0 }]);
-        }
-      } else {
-        setDetailVdoms(mockVdoms[devId] || [{ name: 'root', status: 'enabled', type: 'traffic', policy_count: 0, interface_count: 0 }]);
-      }
-
+    ]).then(([ifaceRes, perfRes]) => {
       // Interfaces
       if (ifaceRes.status === 'fulfilled') {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -185,16 +159,22 @@ export default function Devices() {
         const ifaces = data?.interfaces ?? data;
         if (Array.isArray(ifaces) && ifaces.length > 0) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          setDetailInterfaces(ifaces.map((i: any) => ({
-            name: i.name || '',
-            ip: i.ip || '',
-            status: (i.status === 'up' ? 'up' : 'down') as 'up' | 'down',
-            speed: i.speed || 'N/A',
-            type: i.type || 'physical',
-            vdom: i.vdom || 'root',
-            rx_bytes: i.rx_bytes || 0,
-            tx_bytes: i.tx_bytes || 0,
-          })));
+          setDetailInterfaces(ifaces.map((i: any) => {
+            // Parse FortiGate IP format "10.0.10.1 255.255.255.252" → just the IP
+            const rawIp: string = i.ip || i.ip_address || '';
+            const ipOnly = rawIp.split(' ')[0];
+            const displayIp = (ipOnly && ipOnly !== '0.0.0.0') ? ipOnly : '';
+            return {
+              name: i.name || '',
+              ip: displayIp,
+              status: (i.status === 'up' ? 'up' : 'down') as 'up' | 'down',
+              speed: i.speed || 'N/A',
+              type: i.type || 'physical',
+              vdom: i.vdom || 'root',
+              rx_bytes: i.rx_bytes || 0,
+              tx_bytes: i.tx_bytes || 0,
+            };
+          }));
         } else {
           setDetailInterfaces(mockInterfaces);
         }
@@ -267,11 +247,16 @@ export default function Devices() {
   };
 
   const filtered = useMemo(() => {
+    // If the stored scope ID doesn't match any real device (stale localStorage), treat as 'all'
+    const effectiveScopeId = scope.deviceId === 'all' || devices.some(d => d.id === scope.deviceId)
+      ? scope.deviceId
+      : 'all';
+
     let list = devices.filter((d) => {
       const matchSearch = d.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         d.ip_address.includes(searchQuery) || d.model.toLowerCase().includes(searchQuery.toLowerCase());
       const matchStatus = statusFilter === 'all' || d.status === statusFilter;
-      const matchScope = scope.deviceId === 'all' || d.id === scope.deviceId;
+      const matchScope = effectiveScopeId === 'all' || d.id === effectiveScopeId;
       return matchSearch && matchStatus && matchScope;
     });
     list = [...list].sort((a, b) => {
@@ -319,17 +304,20 @@ export default function Devices() {
       setActionMessage(`Device "${updated.name}" refreshed`);
       setTimeout(() => setActionMessage(''), 2500);
     } catch {
-      // fallback to local jitter if backend unreachable
-      const d = devices.find((x) => String(x.id) === String(id));
-      if (!d) return;
-      setDetailDevice({
-        ...d,
-        cpu_usage: Math.max(1, Math.min(99, Math.round(d.cpu_usage + (Math.random() * 14 - 7)))),
-        memory_usage: Math.max(1, Math.min(99, Math.round(d.memory_usage + (Math.random() * 10 - 5)))),
-        session_count: Math.max(0, Math.round(d.session_count + (Math.random() * 1200 - 600))),
-        updated_at: new Date().toISOString(),
-        last_seen: new Date().toISOString(),
-      });
+      // Fallback: only update detail panel if it's already open for THIS device
+      if (detailDevice && String(detailDevice.id) === String(id)) {
+        setDetailDevice((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            cpu_usage: Math.max(1, Math.min(99, Math.round(prev.cpu_usage + (Math.random() * 14 - 7)))),
+            memory_usage: Math.max(1, Math.min(99, Math.round(prev.memory_usage + (Math.random() * 10 - 5)))),
+            session_count: Math.max(0, Math.round(prev.session_count + (Math.random() * 1200 - 600))),
+            updated_at: new Date().toISOString(),
+            last_seen: new Date().toISOString(),
+          };
+        });
+      }
     }
   };
 
@@ -677,25 +665,6 @@ export default function Devices() {
                       <Area type="monotone" dataKey="memory" stroke="#a78bfa" fill="url(#memGrad)" strokeWidth={1.5} name="Memory" />
                     </AreaChart>
                   </ResponsiveContainer>
-                </div>
-              </div>
-
-              <div>
-                <h5 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">VDOMs</h5>
-                <div className="space-y-2">
-                  {(detailVdoms.length > 0 ? detailVdoms : [{ name: 'root', status: 'enabled', type: 'traffic', policy_count: 0, interface_count: 0 }]).map((vdom) => (
-                    <div key={vdom.name} className="flex items-center justify-between bg-dark-900/50 rounded-lg p-3">
-                      <div className="flex items-center gap-2">
-                        <Shield className="w-4 h-4 text-primary-400" />
-                        <span className="text-sm text-slate-200">{vdom.name}</span>
-                      </div>
-                      <div className="flex items-center gap-3 text-xs text-slate-400">
-                        <span>{vdom.policy_count} policies</span>
-                        <span>{vdom.interface_count} interfaces</span>
-                        <ChevronRight className="w-3.5 h-3.5" />
-                      </div>
-                    </div>
-                  ))}
                 </div>
               </div>
 

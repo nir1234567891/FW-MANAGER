@@ -689,9 +689,13 @@ class BGPNeighborStatus(BaseModel):
     neighbor_ip: str
     local_ip: str = ""
     remote_as: int
+    local_as: int = 0
     admin_status: bool = True
     state: str  # "Established", "Active", "Idle", etc.
     type: str = "ipv4"  # "ipv4" or "ipv6"
+    vdom: str = "root"
+    uptime: str = ""
+    description: str = ""
 
 
 class BGPConfig(BaseModel):
@@ -728,6 +732,10 @@ class OSPFNeighborStatus(BaseModel):
     router_id: str = ""
     state: str  # "Full", "2-Way", "Down", etc.
     priority: int = 1
+    vdom: str = "root"
+    area: str = ""
+    interface_name: str = ""
+    uptime: str = ""
 
 
 class RoutingSummary(BaseModel):
@@ -754,17 +762,17 @@ class BGPStatusResponse(BaseModel):
     """Response for BGP status endpoint."""
     device_id: int
     device_name: str
-    vdom: str
-    config: BGPConfig
-    neighbors: list[BGPNeighborStatus]
+    vdom: str  # "all" when querying all VDOMs
+    config: BGPConfig  # Config from first VDOM with BGP configured
+    bgp_neighbors: list[BGPNeighborStatus]  # renamed for frontend clarity
 
 
 class OSPFStatusResponse(BaseModel):
     """Response for OSPF status endpoint."""
     device_id: int
     device_name: str
-    vdom: str
-    neighbors: list[OSPFNeighborStatus]
+    vdom: str  # "all" when querying all VDOMs
+    ospf_neighbors: list[OSPFNeighborStatus]  # renamed for frontend clarity
 
 
 # ============================================================================
@@ -887,3 +895,42 @@ class DeviceDashboard(BaseModel):
     memory: ResourceMetric
     disk: ResourceMetric
     sessions: ResourceMetric
+
+
+# ============================================================================
+# Alert Schemas
+# ============================================================================
+
+class AlertResponse(BaseModel):
+    """Alert enriched with device name for frontend display.
+
+    Used by GET /api/monitoring/alerts and related endpoints.
+    Adds device_name so the frontend doesn't need a second request.
+    """
+    id: int
+    device_id: int
+    device_name: str        # Joined from devices table
+    severity: str           # "critical", "high", "medium", "low", "info"
+    message: str
+    alert_type: Optional[str] = None   # e.g. "device_down", "cpu_high", "tunnel_down"
+    acknowledged: bool
+    created_at: Optional[str] = None   # ISO 8601 datetime string
+
+
+class EvaluationResult(BaseModel):
+    """Result of POST /api/monitoring/evaluate."""
+    devices_checked: int
+    alerts_created: int
+    alerts: list[dict]      # List of {device_id, type, severity, message}
+
+
+class BulkAcknowledgeResult(BaseModel):
+    """Result of POST /api/monitoring/alerts/bulk-acknowledge."""
+    acknowledged: int
+    message: str
+
+
+class BulkDeleteResult(BaseModel):
+    """Result of DELETE /api/monitoring/alerts/acknowledged."""
+    deleted: int
+    message: str

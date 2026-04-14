@@ -573,7 +573,8 @@ async def get_device_interfaces(
 ):
     """Get all interfaces for a device with parsed IP addresses.
 
-    Returns simplified interface representation with IP/netmask separated.
+    When no VDOM is specified, queries ALL device VDOMs and merges the results
+    so that VLAN and tunnel interfaces from non-root VDOMs are included.
     FortiGate returns IPs as "10.0.10.1 255.255.255.252" - this endpoint parses them.
     """
     result = await db.execute(select(Device).where(Device.id == device_id))
@@ -583,8 +584,27 @@ async def get_device_interfaces(
 
     api = FortiGateAPI(host=device.ip_address, port=device.port, api_key=device.api_key)
     try:
-        interfaces_raw = await api.get_interfaces(vdom=vdom)
-        interfaces_simplified = [_interface_to_simplified(iface) for iface in interfaces_raw]
+        if vdom:
+            # Specific VDOM requested
+            interfaces_raw = await api.get_interfaces(vdom=vdom)
+            interfaces_simplified = [_interface_to_simplified(iface) for iface in interfaces_raw]
+        else:
+            # Query ALL VDOMs and merge (deduplication by vdom+name key)
+            vdom_list = device.vdom_list if device.vdom_list else ["root"]
+            all_interfaces: list[dict] = []
+            seen: set[str] = set()
+            for vdom_name in vdom_list:
+                try:
+                    ifaces = await api.get_interfaces(vdom=vdom_name)
+                    for iface in ifaces:
+                        key = f"{vdom_name}/{iface.get('name', '')}"
+                        if key not in seen:
+                            seen.add(key)
+                            iface["vdom"] = vdom_name  # ensure vdom field is set
+                            all_interfaces.append(iface)
+                except Exception:
+                    continue
+            interfaces_simplified = [_interface_to_simplified(iface) for iface in all_interfaces]
 
         return InterfaceListResponse(
             device_id=device_id,
@@ -754,34 +774,37 @@ async def get_device_routes(
 
     api = FortiGateAPI(host=device.ip_address, port=device.port, api_key=device.api_key)
 
-    target_vdom = vdom or (device.vdom_list[0] if device.vdom_list else "root")
+    vdom_list = [vdom] if vdom else (device.vdom_list if device.vdom_list else ["root"])
 
     try:
-        routes_raw = await api.get_routes(vdom=target_vdom)
-        routes = [
-            ActiveRoute(
-                ip_version=r.get("ip_version", 4),
-                type=r.get("type", "unknown"),
-                ip_mask=r.get("ip_mask", ""),
-                distance=r.get("distance", 0),
-                metric=r.get("metric", 0),
-                priority=r.get("priority", 0),
-                vrf=r.get("vrf", 0),
-                gateway=r.get("gateway", "0.0.0.0"),
-                non_rc_gateway=r.get("non_rc_gateway", "0.0.0.0"),
-                interface=r.get("interface", ""),
-                is_tunnel_route=r.get("is_tunnel_route", False),
-                tunnel_parent=r.get("tunnel_parent", ""),
-                install_date=r.get("install_date"),
-            )
-            for r in routes_raw
-        ]
+        all_routes: list[ActiveRoute] = []
+        for vdom_name in vdom_list:
+            try:
+                routes_raw = await api.get_routes(vdom=vdom_name)
+                for r in routes_raw:
+                    all_routes.append(ActiveRoute(
+                        ip_version=r.get("ip_version", 4),
+                        type=r.get("type", "unknown"),
+                        ip_mask=r.get("ip_mask", ""),
+                        distance=r.get("distance", 0),
+                        metric=r.get("metric", 0),
+                        priority=r.get("priority", 0),
+                        vrf=r.get("vrf", 0),
+                        gateway=r.get("gateway", "0.0.0.0"),
+                        non_rc_gateway=r.get("non_rc_gateway", "0.0.0.0"),
+                        interface=r.get("interface", ""),
+                        is_tunnel_route=r.get("is_tunnel_route", False),
+                        tunnel_parent=r.get("tunnel_parent", ""),
+                        install_date=r.get("install_date"),
+                    ))
+            except Exception:
+                continue
         return RouteListResponse(
             device_id=device_id,
             device_name=device.name,
-            vdom=target_vdom,
-            total=len(routes),
-            routes=routes,
+            vdom=vdom or "all",
+            total=len(all_routes),
+            routes=all_routes,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to fetch routes: {exc}")
@@ -924,22 +947,29 @@ async def get_routing_summary(
         raise HTTPException(status_code=404, detail="Device not found")
 
     api = FortiGateAPI(host=device.ip_address, port=device.port, api_key=device.api_key)
-    target_vdom = vdom or (device.vdom_list[0] if device.vdom_list else "root")
+    vdom_list = [vdom] if vdom else (device.vdom_list if device.vdom_list else ["root"])
 
     try:
-        routes_raw = await api.get_routes(vdom=target_vdom)
+        all_routes: list[dict] = []
+        for vdom_name in vdom_list:
+            try:
+                routes_raw = await api.get_routes(vdom=vdom_name)
+                all_routes.extend(routes_raw)
+            except Exception:
+                continue
+
         by_type: dict[str, int] = {}
-        for r in routes_raw:
+        for r in all_routes:
             rtype = r.get("type", "unknown")
             by_type[rtype] = by_type.get(rtype, 0) + 1
 
         return RoutingSummary(
             device_id=device_id,
             device_name=device.name,
-            vdom=target_vdom,
-            total_routes=len(routes_raw),
+            vdom=vdom or "all",
+            total_routes=len(all_routes),
             by_type=by_type,
-            total_routes_ipv4=len(routes_raw),
+            total_routes_ipv4=len(all_routes),
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to fetch routing summary: {exc}")
@@ -948,17 +978,13 @@ async def get_routing_summary(
 @router.get("/{device_id}/bgp", response_model=BGPStatusResponse)
 async def get_device_bgp(
     device_id: int,
-    vdom: Optional[str] = Query(None, description="Target VDOM"),
+    vdom: Optional[str] = Query(None, description="Target VDOM (omit for all)"),
     db: AsyncSession = Depends(get_db),
 ):
     """Get BGP status: configuration summary + live neighbor states.
 
-    Combines two data sources:
-      - /api/v2/cmdb/router/bgp         → config (ASN, router-id, neighbors configured)
-      - /api/v2/monitor/router/bgp/neighbors → live neighbor states (Established/Idle/etc.)
-
-    Real neighbor states (verified 2026-04-13):
-      Idle, Connect, Active, OpenSent, OpenConfirm, Established
+    When no VDOM is specified, queries ALL device VDOMs and merges results.
+    BGP is typically configured on non-root VDOMs (e.g. VDOM1, VDOM2).
     """
     result = await db.execute(select(Device).where(Device.id == device_id))
     device = result.scalar_one_or_none()
@@ -966,67 +992,73 @@ async def get_device_bgp(
         raise HTTPException(status_code=404, detail="Device not found")
 
     api = FortiGateAPI(host=device.ip_address, port=device.port, api_key=device.api_key)
-    target_vdom = vdom or (device.vdom_list[0] if device.vdom_list else "root")
 
-    # Fetch BGP config (CMDB)
+    vdom_list = [vdom] if vdom else (device.vdom_list if device.vdom_list else ["root"])
+
     bgp_config = BGPConfig()
-    try:
-        config_raw = await api.get_bgp_config(vdom=target_vdom)
-        if isinstance(config_raw, dict):
-            neighbors_cfg = config_raw.get("neighbor", [])
-            networks_cfg = config_raw.get("network", [])
-            bgp_config = BGPConfig(
-                local_as=str(config_raw.get("as", "")),
-                router_id=config_raw.get("router-id", ""),
-                keepalive_timer=config_raw.get("keepalive-timer", 60),
-                holdtime_timer=config_raw.get("holdtime-timer", 180),
-                neighbor_count=len(neighbors_cfg),
-                network_count=len(networks_cfg),
-                neighbors_configured=[
-                    {"ip": n.get("ip", ""), "remote_as": n.get("remote-as", ""), "update_source": n.get("update-source", "")}
-                    for n in neighbors_cfg
-                ],
-            )
-    except Exception:
-        pass
+    all_neighbors: list[BGPNeighborStatus] = []
 
-    # Fetch live neighbor status (monitor)
-    neighbors: list[BGPNeighborStatus] = []
-    try:
-        neighbors_raw = await api.get_bgp_neighbors(vdom=target_vdom)
-        for n in neighbors_raw:
-            neighbors.append(BGPNeighborStatus(
-                neighbor_ip=n.get("neighbor_ip", ""),
-                local_ip=n.get("local_ip", ""),
-                remote_as=n.get("remote_as", 0),
-                admin_status=n.get("admin_status", True),
-                state=n.get("state", "Unknown"),
-                type=n.get("type", "ipv4"),
-            ))
-    except Exception:
-        pass
+    for vdom_name in vdom_list:
+        # Fetch BGP config (CMDB) — keep config from first VDOM with BGP
+        local_as_str = ""
+        try:
+            config_raw = await api.get_bgp_config(vdom=vdom_name)
+            if isinstance(config_raw, dict):
+                local_as_str = str(config_raw.get("as", ""))
+                neighbors_cfg = config_raw.get("neighbor", [])
+                networks_cfg = config_raw.get("network", [])
+                # Use config from first VDOM that has BGP configured
+                if local_as_str and bgp_config.local_as == "":
+                    bgp_config = BGPConfig(
+                        local_as=local_as_str,
+                        router_id=config_raw.get("router-id", ""),
+                        keepalive_timer=config_raw.get("keepalive-timer", 60),
+                        holdtime_timer=config_raw.get("holdtime-timer", 180),
+                        neighbor_count=len(neighbors_cfg),
+                        network_count=len(networks_cfg),
+                        neighbors_configured=[
+                            {"ip": n.get("ip", ""), "remote_as": n.get("remote-as", ""), "update_source": n.get("update-source", "")}
+                            for n in neighbors_cfg
+                        ],
+                    )
+        except Exception:
+            continue
+
+        # Fetch live neighbor status (monitor)
+        try:
+            neighbors_raw = await api.get_bgp_neighbors(vdom=vdom_name)
+            for n in neighbors_raw:
+                all_neighbors.append(BGPNeighborStatus(
+                    neighbor_ip=n.get("neighbor_ip", ""),
+                    local_ip=n.get("local_ip", ""),
+                    remote_as=n.get("remote_as", 0),
+                    local_as=int(local_as_str) if local_as_str.isdigit() else 0,
+                    admin_status=n.get("admin_status", True),
+                    state=n.get("state", "Unknown"),
+                    type=n.get("type", "ipv4"),
+                    vdom=vdom_name,
+                ))
+        except Exception:
+            pass
 
     return BGPStatusResponse(
         device_id=device_id,
         device_name=device.name,
-        vdom=target_vdom,
+        vdom=vdom or "all",
         config=bgp_config,
-        neighbors=neighbors,
+        bgp_neighbors=all_neighbors,
     )
 
 
 @router.get("/{device_id}/ospf", response_model=OSPFStatusResponse)
 async def get_device_ospf(
     device_id: int,
-    vdom: Optional[str] = Query(None, description="Target VDOM"),
+    vdom: Optional[str] = Query(None, description="Target VDOM (omit for all)"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get live OSPF neighbor states.
+    """Get live OSPF neighbor states from all VDOMs.
 
-    Data source: /api/v2/monitor/router/ospf/neighbors
-
-    Real neighbor states (verified 2026-04-13):
-      Full, 2-Way, Init, Down, ExStart, Exchange, Loading
+    When no VDOM is specified, queries ALL device VDOMs and merges results.
     """
     result = await db.execute(select(Device).where(Device.id == device_id))
     device = result.scalar_one_or_none()
@@ -1034,26 +1066,43 @@ async def get_device_ospf(
         raise HTTPException(status_code=404, detail="Device not found")
 
     api = FortiGateAPI(host=device.ip_address, port=device.port, api_key=device.api_key)
-    target_vdom = vdom or (device.vdom_list[0] if device.vdom_list else "root")
 
-    neighbors: list[OSPFNeighborStatus] = []
-    try:
-        neighbors_raw = await api.get_ospf_neighbors(vdom=target_vdom)
-        for n in neighbors_raw:
-            neighbors.append(OSPFNeighborStatus(
-                neighbor_ip=n.get("neighbor_ip", ""),
-                router_id=n.get("router_id", ""),
-                state=n.get("state", "Unknown"),
-                priority=n.get("priority", 1),
-            ))
-    except Exception:
-        pass
+    vdom_list = [vdom] if vdom else (device.vdom_list if device.vdom_list else ["root"])
+
+    all_neighbors: list[OSPFNeighborStatus] = []
+
+    for vdom_name in vdom_list:
+        # Get OSPF config for area info
+        ospf_area = ""
+        try:
+            config_raw = await api.get_ospf_config(vdom=vdom_name)
+            if isinstance(config_raw, dict):
+                areas = config_raw.get("area", [])
+                if areas:
+                    ospf_area = str(areas[0].get("id", "0.0.0.0"))
+        except Exception:
+            pass
+
+        # Fetch live neighbor status (monitor)
+        try:
+            neighbors_raw = await api.get_ospf_neighbors(vdom=vdom_name)
+            for n in neighbors_raw:
+                all_neighbors.append(OSPFNeighborStatus(
+                    neighbor_ip=n.get("neighbor_ip", ""),
+                    router_id=n.get("router_id", ""),
+                    state=n.get("state", "Unknown"),
+                    priority=n.get("priority", 1),
+                    vdom=vdom_name,
+                    area=ospf_area,
+                ))
+        except Exception:
+            pass
 
     return OSPFStatusResponse(
         device_id=device_id,
         device_name=device.name,
-        vdom=target_vdom,
-        neighbors=neighbors,
+        vdom=vdom or "all",
+        ospf_neighbors=all_neighbors,
     )
 
 

@@ -6,6 +6,8 @@ export interface ScopeDevice {
   id: string;
   name: string;
   vdoms: string[];
+  ip_address?: string;
+  model?: string;
 }
 
 export interface GlobalScopeState {
@@ -15,17 +17,8 @@ export interface GlobalScopeState {
 
 const SCOPE_KEY = 'fortimanager-pro-global-scope';
 
-const fallbackScopeDevices: ScopeDevice[] = [
-  { id: '1', name: 'FG-HQ-DC1', vdoms: ['root', 'DMZ', 'Guest'] },
-  { id: '2', name: 'FG-HQ-DC2', vdoms: ['root', 'DMZ', 'Guest'] },
-  { id: '3', name: 'FG-BRANCH-NYC', vdoms: ['root'] },
-  { id: '4', name: 'FG-BRANCH-LON', vdoms: ['root'] },
-  { id: '5', name: 'FG-BRANCH-TKY', vdoms: ['root'] },
-  { id: '6', name: 'FG-BRANCH-SYD', vdoms: ['root'] },
-];
-
 // Shared mutable state for devices loaded from API
-let _scopeDevices: ScopeDevice[] = fallbackScopeDevices;
+let _scopeDevices: ScopeDevice[] = [];
 let _loaded = false;
 
 export { _scopeDevices as scopeDevices };
@@ -84,6 +77,8 @@ export function useScope() {
               vdoms: Array.isArray(d.vdom_list) && d.vdom_list.length > 0
                 ? d.vdom_list as string[]
                 : ['root'],
+              ip_address: dev.ip_address,
+              model: dev.model,
             };
           });
           _scopeDevices = mapped;

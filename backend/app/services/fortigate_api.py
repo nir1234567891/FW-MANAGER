@@ -290,6 +290,16 @@ class FortiGateAPI:
         finally:
             self.vdom = old_vdom
 
+    async def get_ospf_config(self, vdom: Optional[str] = None) -> dict[str, Any]:
+        old_vdom = self.vdom
+        if vdom:
+            self.vdom = vdom
+        try:
+            result = await self._get("/api/v2/cmdb/router/ospf")
+            return result.get("results", {})
+        finally:
+            self.vdom = old_vdom
+
     async def get_uptime_seconds(self) -> int:
         """Calculate device uptime in seconds from web-ui state.
         Uses snapshot_utc_time - utc_last_reboot to get accurate uptime.

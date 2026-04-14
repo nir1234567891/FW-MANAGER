@@ -225,6 +225,7 @@ export default function Routing() {
   const [realBGP, setRealBGP] = useState<BGPNeighbor[]>([]);
   const [realOSPF, setRealOSPF] = useState<OSPFNeighbor[]>([]);
   const [realDevices, setRealDevices] = useState<typeof scopeDevices>([]);
+  const [realInterfaces, setRealInterfaces] = useState<Record<string, InterfaceDetail[]>>({});
   const [loading, setLoading] = useState(false);
 
   // Load real devices and routing data from API
@@ -280,7 +281,7 @@ export default function Routing() {
               device_id: dev.id,
               device_name: dev.name,
               vdom: n.vdom || 'root',
-              neighbor_id: n.neighbor_id || n.neighbor_ip || '',
+              neighbor_id: n.router_id || n.neighbor_id || n.neighbor_ip || '',
               neighbor_ip: n.neighbor_ip || '',
               area: n.area || '0.0.0.0',
               state: (n.state || 'down').toLowerCase() as NeighborState,
@@ -295,6 +296,48 @@ export default function Routing() {
 
       if (bgpAll.length > 0) setRealBGP(bgpAll);
       if (ospfAll.length > 0) setRealOSPF(ospfAll);
+
+      // Load real interfaces for the Interface Port Map
+      const ifaceMap: Record<string, InterfaceDetail[]> = {};
+      await Promise.allSettled(devs.map(async (dev) => {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const ifaceRes = await deviceService.getInterfaces(dev.id) as any;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const data = ifaceRes.data as any;
+          const ifaces = data?.interfaces ?? data;
+          if (Array.isArray(ifaces) && ifaces.length > 0) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            ifaceMap[dev.id] = ifaces.map((i: any): InterfaceDetail => {
+              const rawIp: string = i.ip || i.ip_address || '';
+              const parts = rawIp.split(' ');
+              const ipOnly = parts[0];
+              const displayIp = (ipOnly && ipOnly !== '0.0.0.0') ? ipOnly : '';
+              const st = i.status === 'up' ? 'up' : 'down';
+              return {
+                name: i.name || '',
+                ip: displayIp,
+                mask: i.netmask || parts[1] || '',
+                status: st,
+                speed: i.speed || 'N/A',
+                duplex: 'N/A',
+                type: i.type || 'physical',
+                vdom: i.vdom || 'root',
+                mtu: i.mtu || 1500,
+                description: i.description || i.alias || '',
+                rx_bytes: i.rx_bytes || 0,
+                tx_bytes: i.tx_bytes || 0,
+                rx_errors: 0,
+                tx_errors: 0,
+                media: 'N/A',
+                allowaccess: i.allowaccess || '',
+              };
+            });
+          }
+        } catch { /* skip */ }
+      }));
+      if (Object.keys(ifaceMap).length > 0) setRealInterfaces(ifaceMap);
+
     } catch {
       // Ignore errors
     } finally {
@@ -314,24 +357,29 @@ export default function Routing() {
   const vdom = scope.vdom;
 
   const bgpFiltered = useMemo(() => {
+    // When no real BGP data loaded, don't filter mock data by device ID
+    // (mock uses IDs '1'-'6' while real devices may have different IDs)
+    const usingMock = realBGP.length === 0;
     const q = search.toLowerCase();
     return activeBGP.filter((n) => {
-      const devMatch = deviceId === 'all' || n.device_id === deviceId;
+      const devMatch = deviceId === 'all' || usingMock || n.device_id === deviceId;
       const vdomMatch = vdom === 'all' || n.vdom === vdom;
       const textMatch = n.neighbor_ip.includes(q) || n.description.toLowerCase().includes(q) || n.device_name.toLowerCase().includes(q);
       return devMatch && vdomMatch && textMatch;
     });
-  }, [deviceId, vdom, search, activeBGP]);
+  }, [deviceId, vdom, search, activeBGP, realBGP]);
 
   const ospfFiltered = useMemo(() => {
+    // When no real OSPF data loaded, don't filter mock data by device ID
+    const usingMock = realOSPF.length === 0;
     const q = search.toLowerCase();
     return activeOSPF.filter((n) => {
-      const devMatch = deviceId === 'all' || n.device_id === deviceId;
+      const devMatch = deviceId === 'all' || usingMock || n.device_id === deviceId;
       const vdomMatch = vdom === 'all' || n.vdom === vdom;
       const textMatch = n.neighbor_ip.includes(q) || n.neighbor_id.includes(q) || n.device_name.toLowerCase().includes(q);
       return devMatch && vdomMatch && textMatch;
     });
-  }, [deviceId, vdom, search, activeOSPF]);
+  }, [deviceId, vdom, search, activeOSPF, realOSPF]);
 
   const bgpUp = bgpFiltered.filter((n) => isNeighborUp(n.state)).length;
   const bgpDown = bgpFiltered.length - bgpUp;
@@ -520,7 +568,8 @@ export default function Routing() {
           <span className="text-slate-500 font-normal ml-2">Hover any port to see full details</span>
         </h3>
         {interfaceDevices.map((dev) => {
-          const ifaces = mockInterfaces[dev.id] || [];
+          // Prefer real interfaces from API; fall back to mock if not yet loaded
+          const ifaces = realInterfaces[dev.id] || mockInterfaces[dev.id] || [];
           if (ifaces.length === 0) return null;
           const physical = ifaces.filter((i) => i.type === 'physical');
           const virtual = ifaces.filter((i) => i.type !== 'physical');
