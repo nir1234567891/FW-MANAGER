@@ -2,27 +2,20 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Device, Backup
+from app.schemas import BackupCreate, BackupCompare
 from app.services import backup_service
 
 router = APIRouter(prefix="/api/backups", tags=["backups"])
 
 
-class BackupCreate(BaseModel):
-    vdom_name: Optional[str] = None
-    backup_type: str = "manual"
-    notes: Optional[str] = None
-
-
-class BackupCompare(BaseModel):
-    backup_id_1: int
-    backup_id_2: int
-
+# ---------------------------------------------------------------------------
+# Fixed-path routes MUST come before parameterized /{id} routes
+# ---------------------------------------------------------------------------
 
 @router.get("")
 async def list_backups(
@@ -32,10 +25,19 @@ async def list_backups(
     db: AsyncSession = Depends(get_db),
 ):
     backups = await backup_service.list_backups(db, device_id=device_id, limit=limit, offset=offset)
+
+    device_ids = list({b.device_id for b in backups})
+    device_map: dict[int, str] = {}
+    if device_ids:
+        dev_result = await db.execute(select(Device).where(Device.id.in_(device_ids)))
+        for d in dev_result.scalars().all():
+            device_map[d.id] = d.name
+
     return [
         {
             "id": b.id,
             "device_id": b.device_id,
+            "device_name": device_map.get(b.device_id, f"Device {b.device_id}"),
             "vdom_name": b.vdom_name,
             "filename": b.filename,
             "file_size": b.file_size,
@@ -47,6 +49,87 @@ async def list_backups(
         for b in backups
     ]
 
+
+@router.post("/compare")
+async def compare_backups(payload: BackupCompare, db: AsyncSession = Depends(get_db)):
+    try:
+        result = await backup_service.compare_backups(db, payload.backup_id_1, payload.backup_id_2)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    return result
+
+
+@router.post("/auto")
+async def auto_backup_all(db: AsyncSession = Depends(get_db)):
+    """Backup all online devices automatically."""
+    results = await backup_service.auto_backup_all_devices(db)
+    success_count = sum(1 for r in results if r["success"])
+    return {
+        "message": f"Auto-backup completed: {success_count}/{len(results)} successful",
+        "total": len(results),
+        "success": success_count,
+        "failed": len(results) - success_count,
+        "results": results,
+    }
+
+
+@router.post("/backup-all")
+async def backup_all_devices(
+    db: AsyncSession = Depends(get_db),
+):
+    """Backup ALL managed devices (online + offline attempted).
+
+    Unlike /auto which only targets online devices, this endpoint
+    attempts every device and reports per-device success/failure.
+    """
+    result = await db.execute(select(Device))
+    devices = list(result.scalars().all())
+
+    if not devices:
+        raise HTTPException(status_code=404, detail="No devices found")
+
+    results = []
+    for device in devices:
+        try:
+            bkp = await backup_service.create_backup(
+                db, device,
+                backup_type="manual",
+                notes="Bulk backup (all devices)",
+            )
+            results.append({
+                "device_id": device.id,
+                "device_name": device.name,
+                "success": True,
+                "backup_id": bkp.id,
+                "filename": bkp.filename,
+                "file_size": bkp.file_size,
+            })
+        except Exception as exc:
+            results.append({
+                "device_id": device.id,
+                "device_name": device.name,
+                "success": False,
+                "error": str(exc),
+            })
+
+    await db.commit()
+
+    success_count = sum(1 for r in results if r["success"])
+    return {
+        "message": f"Bulk backup completed: {success_count}/{len(results)} successful",
+        "total": len(results),
+        "success": success_count,
+        "failed": len(results) - success_count,
+        "results": results,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Parameterized routes (must come AFTER fixed paths like /auto, /compare)
+# ---------------------------------------------------------------------------
 
 @router.post("/{device_id}", status_code=201)
 async def create_backup(
@@ -116,31 +199,9 @@ async def get_backup_content(backup_id: int, db: AsyncSession = Depends(get_db))
     }
 
 
-@router.post("/compare")
-async def compare_backups(payload: BackupCompare, db: AsyncSession = Depends(get_db)):
-    try:
-        result = await backup_service.compare_backups(db, payload.backup_id_1, payload.backup_id_2)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-
-    return result
-
-
 @router.delete("/{backup_id}")
 async def delete_backup(backup_id: int, db: AsyncSession = Depends(get_db)):
     success = await backup_service.delete_backup(db, backup_id)
     if not success:
         raise HTTPException(status_code=404, detail="Backup not found")
     return {"message": "Backup deleted successfully"}
-
-
-@router.post("/auto")
-async def auto_backup_all(db: AsyncSession = Depends(get_db)):
-    results = await backup_service.auto_backup_all_devices(db)
-    success_count = sum(1 for r in results if r["success"])
-    return {
-        "message": f"Auto-backup completed: {success_count}/{len(results)} successful",
-        "results": results,
-    }

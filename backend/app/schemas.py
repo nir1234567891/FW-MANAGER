@@ -4,6 +4,89 @@ from pydantic import BaseModel, Field
 
 
 # ============================================================================
+# Device CRUD Schemas (moved from routers/devices.py)
+# ============================================================================
+
+class DeviceCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    hostname: str = Field(..., min_length=1, max_length=255)
+    ip_address: str = Field(..., min_length=1, max_length=45)
+    port: int = Field(default=443, ge=1, le=65535)
+    api_key: str = Field(..., min_length=1)
+    notes: Optional[str] = None
+
+
+class DeviceUpdate(BaseModel):
+    name: Optional[str] = None
+    hostname: Optional[str] = None
+    ip_address: Optional[str] = None
+    port: Optional[int] = None
+    api_key: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class DeviceResponse(BaseModel):
+    id: int
+    name: str
+    hostname: str
+    ip_address: str
+    port: int
+    serial_number: Optional[str] = None
+    firmware_version: Optional[str] = None
+    model: Optional[str] = None
+    ha_status: Optional[str] = None
+    status: str
+    vdom_list: Optional[list] = None
+    cpu_usage: float
+    memory_usage: float
+    disk_usage: float = 0.0
+    session_count: int
+    uptime: Optional[str] = None
+    last_seen: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    notes: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================================================
+# Backup CRUD Schemas (moved from routers/backups.py)
+# ============================================================================
+
+class BackupCreate(BaseModel):
+    vdom_name: Optional[str] = None
+    backup_type: str = "manual"
+    notes: Optional[str] = None
+
+
+class BackupCompare(BaseModel):
+    backup_id_1: int
+    backup_id_2: int
+
+
+# ============================================================================
+# Dashboard Overview Schema
+# ============================================================================
+
+class DashboardOverview(BaseModel):
+    """Fleet-wide aggregated stats for the dashboard."""
+    devices_total: int = 0
+    devices_online: int = 0
+    devices_offline: int = 0
+    tunnels_total: int = 0
+    tunnels_up: int = 0
+    tunnels_down: int = 0
+    policies_total: int = 0
+    alerts_unacknowledged: int = 0
+    alerts_critical: int = 0
+    avg_cpu: float = 0.0
+    avg_memory: float = 0.0
+    total_sessions: int = 0
+
+
+# ============================================================================
 # IPsec VPN Monitor Schemas (from /api/v2/monitor/vpn/ipsec)
 # ============================================================================
 

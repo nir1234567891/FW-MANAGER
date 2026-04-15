@@ -370,20 +370,22 @@ async def sync_policies(
             errors.append(f"Failed to sync policy {pid}: {str(exc)}")
             continue
 
-    # Remove policies from DB that no longer exist on the device
+    # Remove policies from DB that no longer exist on the device.
+    # Guard: only delete stale rows when we actually received policies from the device.
     live_policy_ids = {p.get("policyid") for p in policies_data if p.get("policyid")}
-    stale_result = await db.execute(
-        select(Policy).where(
-            Policy.device_id == device_id,
-            Policy.vdom_name == vdom_name,
-            Policy.policy_id.notin_(live_policy_ids) if live_policy_ids else True,
-        )
-    )
-    stale_policies = stale_result.scalars().all()
     deleted = 0
-    for stale in stale_policies:
-        await db.delete(stale)
-        deleted += 1
+    if live_policy_ids:
+        stale_result = await db.execute(
+            select(Policy).where(
+                Policy.device_id == device_id,
+                Policy.vdom_name == vdom_name,
+                Policy.policy_id.notin_(live_policy_ids),
+            )
+        )
+        stale_policies = stale_result.scalars().all()
+        for stale in stale_policies:
+            await db.delete(stale)
+            deleted += 1
 
     if deleted:
         logger.info("Removed %d stale policies from DB for %s/%s", deleted, device.name, vdom_name)

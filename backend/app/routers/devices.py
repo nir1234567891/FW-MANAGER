@@ -2,14 +2,17 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Device, VDOM
 from app.services.fortigate_api import FortiGateAPI
+from app.services.utils import extract_current, build_model_name
 from app.schemas import (
+    DeviceCreate,
+    DeviceUpdate,
+    DeviceResponse,
     InterfaceSimplified,
     InterfaceListResponse,
     InterfaceStatistics,
@@ -32,50 +35,6 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix="/api/devices", tags=["devices"])
-
-
-class DeviceCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=255)
-    hostname: str = Field(..., min_length=1, max_length=255)
-    ip_address: str = Field(..., min_length=1, max_length=45)
-    port: int = Field(default=443, ge=1, le=65535)
-    api_key: str = Field(..., min_length=1)
-    notes: Optional[str] = None
-
-
-class DeviceUpdate(BaseModel):
-    name: Optional[str] = None
-    hostname: Optional[str] = None
-    ip_address: Optional[str] = None
-    port: Optional[int] = None
-    api_key: Optional[str] = None
-    notes: Optional[str] = None
-
-
-class DeviceResponse(BaseModel):
-    id: int
-    name: str
-    hostname: str
-    ip_address: str
-    port: int
-    serial_number: Optional[str] = None
-    firmware_version: Optional[str] = None
-    model: Optional[str] = None
-    ha_status: Optional[str] = None
-    status: str
-    vdom_list: Optional[list] = None
-    cpu_usage: float
-    memory_usage: float
-    disk_usage: float = 0.0
-    session_count: int
-    uptime: Optional[str] = None
-    last_seen: Optional[str] = None
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
-    notes: Optional[str] = None
-
-    class Config:
-        from_attributes = True
 
 
 def _device_to_dict(device: Device) -> dict:
@@ -213,38 +172,8 @@ async def delete_device(device_id: int, db: AsyncSession = Depends(get_db)):
     return {"message": f"Device '{device.name}' deleted successfully"}
 
 
-def _extract_current(resource_list) -> int:
-    """Extract 'current' value from resource/usage list format.
-
-    FortiGate resource/usage returns each metric as a list of length 1:
-      results.cpu = [{"current": 5, "historical": {...}}]
-    This extracts [0]["current"].
-    """
-    if isinstance(resource_list, list) and resource_list:
-        first = resource_list[0]
-        if isinstance(first, dict):
-            return int(first.get("current", 0))
-    return 0
-
-
-def _build_model_name(status_data: dict) -> str:
-    """Build friendly model name from system/status response.
-
-    Real FortiGate returns:
-      model_name = "FortiGateRugged"
-      model_number = "60F"
-      model = "FGR60F"  (model code)
-
-    Builds: "FortiGateRugged 60F", falling back to model code.
-    """
-    model_name = status_data.get("model_name", "")
-    model_number = status_data.get("model_number", "")
-    model_code = status_data.get("model", "")
-    if model_name and model_number:
-        return f"{model_name} {model_number}"
-    elif model_name:
-        return model_name
-    return model_code
+_extract_current = extract_current
+_build_model_name = build_model_name
 
 
 @router.post("/{device_id}/refresh")
@@ -589,7 +518,11 @@ async def get_device_interfaces(
             interfaces_raw = await api.get_interfaces(vdom=vdom)
             interfaces_simplified = [_interface_to_simplified(iface) for iface in interfaces_raw]
         else:
-            # Query ALL VDOMs and merge (deduplication by vdom+name key)
+            # Query ALL VDOMs and merge.
+            # FortiGate returns ALL interfaces regardless of VDOM scope,
+            # so we deduplicate by the interface's own name (globally unique
+            # on a device). We use the interface's actual "vdom" field from
+            # the response, not the VDOM we queried.
             vdom_list = device.vdom_list if device.vdom_list else ["root"]
             all_interfaces: list[dict] = []
             seen: set[str] = set()
@@ -597,10 +530,9 @@ async def get_device_interfaces(
                 try:
                     ifaces = await api.get_interfaces(vdom=vdom_name)
                     for iface in ifaces:
-                        key = f"{vdom_name}/{iface.get('name', '')}"
-                        if key not in seen:
-                            seen.add(key)
-                            iface["vdom"] = vdom_name  # ensure vdom field is set
+                        iface_name = iface.get("name", "")
+                        if iface_name not in seen:
+                            seen.add(iface_name)
                             all_interfaces.append(iface)
                 except Exception:
                     continue
@@ -1104,6 +1036,41 @@ async def get_device_ospf(
         vdom=vdom or "all",
         ospf_neighbors=all_neighbors,
     )
+
+
+@router.get("/{device_id}/system-global")
+async def get_system_global(device_id: int, db: AsyncSession = Depends(get_db)):
+    """Get system global configuration from FortiGate CMDB.
+
+    Returns hostname, admin settings, VDOM mode, and other global settings.
+    """
+    result = await db.execute(select(Device).where(Device.id == device_id))
+    device = result.scalar_one_or_none()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    api = FortiGateAPI(host=device.ip_address, port=device.port, api_key=device.api_key)
+
+    try:
+        global_config = await api.get_system_global()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch system global: {exc}")
+
+    return {
+        "device_id": device_id,
+        "device_name": device.name,
+        "hostname": global_config.get("hostname", ""),
+        "alias": global_config.get("alias", ""),
+        "vdom_mode": global_config.get("vdom-mode", "no-vdom"),
+        "admin_sport": global_config.get("admin-sport", 443),
+        "admin_ssh_port": global_config.get("admin-ssh-port", 22),
+        "admintimeout": global_config.get("admintimeout", 5),
+        "timezone": global_config.get("timezone", ""),
+        "language": global_config.get("language", "english"),
+        "gui_theme": global_config.get("gui-theme", ""),
+        "admin_lockout_threshold": global_config.get("admin-lockout-threshold", 3),
+        "admin_lockout_duration": global_config.get("admin-lockout-duration", 60),
+    }
 
 
 @router.get("/{device_id}/debug-live")

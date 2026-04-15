@@ -1,5 +1,7 @@
 import { Routes, Route } from 'react-router-dom';
 import Layout from '@/components/Layout';
+import ErrorBoundary from '@/components/ErrorBoundary';
+import { ToastProvider } from '@/components/Toast';
 import Dashboard from '@/pages/Dashboard';
 import Devices from '@/pages/Devices';
 import TunnelMap from '@/pages/TunnelMap';
@@ -11,23 +13,29 @@ import Routing from '@/pages/Routing';
 import BulkCLI from '@/pages/BulkCLI';
 import Compliance from '@/pages/Compliance';
 import Settings from '@/pages/Settings';
+import NotFound from '@/pages/NotFound';
 
 export default function App() {
   return (
-    <Routes>
-      <Route element={<Layout />}>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/devices" element={<Devices />} />
-        <Route path="/tunnel-map" element={<TunnelMap />} />
-        <Route path="/routing" element={<Routing />} />
-        <Route path="/bulk-cli" element={<BulkCLI />} />
-        <Route path="/compliance" element={<Compliance />} />
-        <Route path="/backups" element={<Backups />} />
-        <Route path="/monitoring" element={<Monitoring />} />
-        <Route path="/policies" element={<Policies />} />
-        <Route path="/alerts" element={<Alerts />} />
-        <Route path="/settings" element={<Settings />} />
-      </Route>
-    </Routes>
+    <ErrorBoundary>
+      <ToastProvider>
+        <Routes>
+          <Route element={<Layout />}>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/devices" element={<Devices />} />
+            <Route path="/tunnel-map" element={<TunnelMap />} />
+            <Route path="/routing" element={<Routing />} />
+            <Route path="/bulk-cli" element={<BulkCLI />} />
+            <Route path="/compliance" element={<Compliance />} />
+            <Route path="/backups" element={<Backups />} />
+            <Route path="/monitoring" element={<Monitoring />} />
+            <Route path="/policies" element={<Policies />} />
+            <Route path="/alerts" element={<Alerts />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="*" element={<NotFound />} />
+          </Route>
+        </Routes>
+      </ToastProvider>
+    </ErrorBoundary>
   );
 }

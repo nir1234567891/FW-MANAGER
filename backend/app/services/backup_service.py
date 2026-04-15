@@ -38,12 +38,33 @@ async def create_backup(
         api_key=device.api_key,
     )
 
-    scope = "vdom" if vdom_name else "global"
-    try:
-        config_content = await api.backup_config(vdom=vdom_name, scope=scope)
-    except Exception as exc:
-        logger.error("Failed to backup device %s: %s", device.name, exc)
-        raise RuntimeError(f"Backup failed for {device.name}: {exc}")
+    config_content: Optional[str] = None
+
+    if vdom_name:
+        # Specific VDOM requested
+        try:
+            config_content = await api.backup_config(vdom=vdom_name, scope="vdom")
+        except Exception as exc:
+            logger.error("VDOM backup failed for %s/%s: %s", device.name, vdom_name, exc)
+            raise RuntimeError(f"Backup failed for {device.name} VDOM {vdom_name}: {exc}")
+    else:
+        # Full config: try global first, fall back to root VDOM
+        try:
+            config_content = await api.backup_config(scope="global")
+        except Exception as exc:
+            logger.warning(
+                "Global backup failed for %s (likely API token permission), "
+                "falling back to root VDOM backup: %s", device.name, exc,
+            )
+            try:
+                vdom_name = "root"
+                config_content = await api.backup_config(vdom="root", scope="vdom")
+            except Exception as exc2:
+                logger.error("Fallback VDOM backup also failed for %s: %s", device.name, exc2)
+                raise RuntimeError(
+                    f"Backup failed for {device.name}: global scope returned 403 "
+                    f"and root VDOM fallback also failed: {exc2}"
+                )
 
     backup_dir = _ensure_backup_dir()
     device_dir = os.path.join(backup_dir, device.name.replace(" ", "_"))

@@ -25,14 +25,15 @@ from app.database import get_db
 from app.models import Alert, Device, VPNTunnel
 from app.schemas import AlertResponse, BulkAcknowledgeResult, BulkDeleteResult, EvaluationResult
 from app.services.fortigate_api import FortiGateAPI
+from app.services.utils import (
+    extract_current,
+    CPU_HIGH_THRESHOLD,
+    CPU_CRITICAL_THRESHOLD,
+    MEM_HIGH_THRESHOLD,
+    MEM_CRITICAL_THRESHOLD,
+)
 
 logger = logging.getLogger(__name__)
-
-# Alert thresholds
-CPU_HIGH_THRESHOLD = 85.0
-CPU_CRITICAL_THRESHOLD = 95.0
-MEM_HIGH_THRESHOLD = 85.0
-MEM_CRITICAL_THRESHOLD = 95.0
 
 router = APIRouter(prefix="/api/monitoring", tags=["monitoring"])
 
@@ -54,13 +55,7 @@ def _alert_to_dict(a: Alert, device_name: str) -> dict:
     }
 
 
-def _extract_current(resource_list) -> int:
-    """Extract 'current' value from FortiGate resource/usage list format."""
-    if isinstance(resource_list, list) and resource_list:
-        first = resource_list[0]
-        if isinstance(first, dict):
-            return int(first.get("current", 0))
-    return 0
+_extract_current = extract_current
 
 
 # ---------------------------------------------------------------------------

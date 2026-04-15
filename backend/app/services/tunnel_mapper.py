@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import math
 from typing import Optional
@@ -11,121 +12,125 @@ from app.services.fortigate_api import FortiGateAPI
 logger = logging.getLogger(__name__)
 
 
+def _parse_tunnel_data(tdata: dict, vdom_name: str) -> dict:
+    """Parse raw FortiGate tunnel monitor data into a flat dict."""
+    phase1 = tdata.get("name", "unknown")
+    remote_gw = tdata.get("rgwy", "")
+
+    proxyid = tdata.get("proxyid", [])
+    if proxyid and isinstance(proxyid, list):
+        pid = proxyid[0]
+        tun_status = "up" if pid.get("status", "") == "up" else "down"
+        incoming = int(pid.get("incoming_bytes", 0))
+        outgoing = int(pid.get("outgoing_bytes", 0))
+        local_sub = pid.get("proxy_src", [])
+        remote_sub = pid.get("proxy_dst", [])
+        phase2 = pid.get("p2name", "")
+    else:
+        tun_status = "down"
+        incoming = int(tdata.get("incoming_bytes", 0))
+        outgoing = int(tdata.get("outgoing_bytes", 0))
+        local_sub = []
+        remote_sub = []
+        phase2 = ""
+
+    local_subnet = ""
+    if isinstance(local_sub, list) and local_sub:
+        local_subnet = local_sub[0].get("subnet", "")
+    remote_subnet = ""
+    if isinstance(remote_sub, list) and remote_sub:
+        remote_subnet = remote_sub[0].get("subnet", "")
+
+    return {
+        "tunnel_name": phase1,
+        "remote_gateway": str(remote_gw),
+        "status": tun_status,
+        "incoming_bytes": incoming,
+        "outgoing_bytes": outgoing,
+        "phase1_name": str(phase1),
+        "phase2_name": str(phase2),
+        "local_subnet": str(local_subnet),
+        "remote_subnet": str(remote_subnet),
+        "vdom_name": vdom_name,
+        "uptime_seconds": int(tdata.get("creation_time", 0)),
+    }
+
+
+async def _discover_device(device: Device, db: AsyncSession) -> tuple[int, list[dict]]:
+    """Discover tunnels for a single device. Returns (discovered_count, errors)."""
+    discovered = 0
+    errors: list[dict] = []
+
+    try:
+        api = FortiGateAPI(
+            host=device.ip_address,
+            port=device.port,
+            api_key=device.api_key,
+        )
+        vdom_list = device.vdom_list if device.vdom_list else ["root"]
+
+        existing_stmt = select(VPNTunnel).where(VPNTunnel.device_id == device.id)
+        existing_result = await db.execute(existing_stmt)
+        existing = {t.tunnel_name: t for t in existing_result.scalars().all()}
+
+        seen_tunnel_names: set[str] = set()
+
+        for vdom_name in vdom_list:
+            try:
+                tunnels_data = await api.get_vpn_tunnels(vdom=vdom_name)
+            except Exception as vdom_exc:
+                logger.debug("No tunnels on %s vdom=%s: %s", device.name, vdom_name, vdom_exc)
+                continue
+
+            for tdata in tunnels_data:
+                parsed = _parse_tunnel_data(tdata, vdom_name)
+                tunnel_name = parsed["tunnel_name"]
+                seen_tunnel_names.add(tunnel_name)
+
+                if tunnel_name in existing:
+                    tunnel = existing[tunnel_name]
+                    for key, val in parsed.items():
+                        if key != "tunnel_name":
+                            setattr(tunnel, key, val)
+                else:
+                    tunnel = VPNTunnel(
+                        device_id=device.id,
+                        tunnel_type="ipsec",
+                        **parsed,
+                    )
+                    db.add(tunnel)
+                    discovered += 1
+
+        for tname, tunnel in existing.items():
+            if tname not in seen_tunnel_names:
+                await db.delete(tunnel)
+                logger.info("Removed stale tunnel '%s' from device '%s'", tname, device.name)
+
+    except Exception as exc:
+        logger.error("Tunnel discovery failed for %s: %s", device.name, exc)
+        errors.append({"device": device.name, "error": str(exc)})
+
+    return discovered, errors
+
+
 async def discover_tunnels(db: AsyncSession) -> dict:
     stmt = select(Device).where(Device.status.in_(["online", "unknown"]))
     result = await db.execute(stmt)
     devices = list(result.scalars().all())
 
+    results = await asyncio.gather(
+        *[_discover_device(dev, db) for dev in devices],
+        return_exceptions=True,
+    )
+
     discovered = 0
-    errors = []
-
-    for device in devices:
-        try:
-            api = FortiGateAPI(
-                host=device.ip_address,
-                port=device.port,
-                api_key=device.api_key,
-            )
-
-            # Query ALL VDOMs for tunnels, not just root
-            vdom_list = device.vdom_list if device.vdom_list else ["root"]
-
-            existing_stmt = select(VPNTunnel).where(VPNTunnel.device_id == device.id)
-            existing_result = await db.execute(existing_stmt)
-            existing = {t.tunnel_name: t for t in existing_result.scalars().all()}
-
-            # Track which tunnels we see from FortiGate (to detect deletions)
-            seen_tunnel_names: set[str] = set()
-
-            for vdom_name in vdom_list:
-                try:
-                    tunnels_data = await api.get_vpn_tunnels(vdom=vdom_name)
-                except Exception as vdom_exc:
-                    logger.debug("No tunnels on %s vdom=%s: %s", device.name, vdom_name, vdom_exc)
-                    continue
-
-                for tdata in tunnels_data:
-                    # Phase 1 name is always in "name" field
-                    phase1 = tdata.get("name", "unknown")
-                    tunnel_name = phase1  # Use phase1 name as tunnel identifier
-                    seen_tunnel_names.add(tunnel_name)
-
-                    # Remote gateway is in "rgwy" field (not "remote_gateway")
-                    remote_gw = tdata.get("rgwy", "")
-
-                    # Extract proxy IDs from nested proxyid structure
-                    proxyid = tdata.get("proxyid", [])
-                    if proxyid and isinstance(proxyid, list):
-                        # Use first proxyid for tunnel status
-                        pid = proxyid[0]
-                        tun_status = "up" if pid.get("status", "") == "up" else "down"
-                        incoming = int(pid.get("incoming_bytes", 0))
-                        outgoing = int(pid.get("outgoing_bytes", 0))
-                        local_sub = pid.get("proxy_src", [])
-                        remote_sub = pid.get("proxy_dst", [])
-                        phase2 = pid.get("p2name", "")
-                    else:
-                        # No proxyid means tunnel is down/not established
-                        # NOTE: FortiGate monitor API has NO top-level "status" field!
-                        tun_status = "down"
-                        incoming = int(tdata.get("incoming_bytes", 0))
-                        outgoing = int(tdata.get("outgoing_bytes", 0))
-                        local_sub = []
-                        remote_sub = []
-                        phase2 = ""
-
-                    # Parse subnet strings from proxy_src/proxy_dst
-                    local_subnet = ""
-                    if local_sub and isinstance(local_sub, list) and len(local_sub) > 0:
-                        local_subnet = local_sub[0].get("subnet", "")
-
-                    remote_subnet = ""
-                    if remote_sub and isinstance(remote_sub, list) and len(remote_sub) > 0:
-                        remote_subnet = remote_sub[0].get("subnet", "")
-
-                    # creation_time = seconds since tunnel came up
-                    uptime_secs = int(tdata.get("creation_time", 0))
-
-                    if tunnel_name in existing:
-                        tunnel = existing[tunnel_name]
-                        tunnel.remote_gateway = str(remote_gw)
-                        tunnel.status = tun_status
-                        tunnel.incoming_bytes = incoming
-                        tunnel.outgoing_bytes = outgoing
-                        tunnel.phase1_name = str(phase1)
-                        tunnel.phase2_name = str(phase2)
-                        tunnel.local_subnet = str(local_subnet)
-                        tunnel.remote_subnet = str(remote_subnet)
-                        tunnel.vdom_name = vdom_name
-                        tunnel.uptime_seconds = uptime_secs
-                    else:
-                        tunnel = VPNTunnel(
-                            device_id=device.id,
-                            vdom_name=vdom_name,
-                            tunnel_name=tunnel_name,
-                            remote_gateway=str(remote_gw),
-                            tunnel_type="ipsec",
-                            status=tun_status,
-                            incoming_bytes=incoming,
-                            outgoing_bytes=outgoing,
-                            phase1_name=str(phase1),
-                            phase2_name=str(phase2),
-                            local_subnet=str(local_subnet),
-                            remote_subnet=str(remote_subnet),
-                            uptime_seconds=uptime_secs,
-                        )
-                        db.add(tunnel)
-                        discovered += 1
-
-            # Remove tunnels from DB that no longer exist on the device
-            for tname, tunnel in existing.items():
-                if tname not in seen_tunnel_names:
-                    await db.delete(tunnel)
-                    logger.info("Removed stale tunnel '%s' from device '%s'", tname, device.name)
-
-        except Exception as exc:
-            logger.error("Tunnel discovery failed for %s: %s", device.name, exc)
-            errors.append({"device": device.name, "error": str(exc)})
+    errors: list[dict] = []
+    for r in results:
+        if isinstance(r, Exception):
+            errors.append({"device": "unknown", "error": str(r)})
+        else:
+            discovered += r[0]
+            errors.extend(r[1])
 
     await db.flush()
     await map_tunnel_endpoints(db)

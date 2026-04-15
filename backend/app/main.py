@@ -13,7 +13,7 @@ from app.config import settings
 from app.database import engine, async_session, init_db, Base
 from app.models import Device, VDOM, VPNTunnel, Backup, Policy, Alert
 
-from app.routers import devices, backups, tunnels, monitoring, policies
+from app.routers import devices, backups, tunnels, monitoring, policies, dashboard, objects, cli
 from app.services.health_checker import health_check_loop
 
 logger = logging.getLogger(__name__)
@@ -244,15 +244,18 @@ end
                 )
                 db.add(backup)
 
+        def _obj(name: str) -> dict:
+            return {"name": name, "q_origin_key": name}
+
         policy_templates = [
-            (1, "Allow-LAN-to-Internet", "port2", "port1", "LAN-Net", "all", "accept", "ALL", "always", "enable", "enable", "all", "Allow LAN users internet access", 125000),
-            (2, "VPN-Site-Traffic", "port2", "vpn-tunnel", "LAN-Net", "Remote-Net", "accept", "ALL", "always", "disable", "enable", "all", "Inter-site VPN traffic", 89000),
-            (3, "Allow-DNS", "port2", "port1", "all", "DNS-Servers", "accept", "DNS", "always", "enable", "enable", "utm", "DNS resolution", 340000),
-            (4, "Allow-HTTPS", "port2", "port1", "all", "all", "accept", "HTTPS", "always", "enable", "enable", "all", "HTTPS traffic", 95000),
-            (5, "Block-Malware-Sites", "port2", "port1", "all", "Malware-Block-List", "deny", "ALL", "always", "disable", "enable", "all", "Block known malware sites", 2300),
-            (6, "Allow-ICMP", "any", "any", "all", "all", "accept", "PING", "always", "disable", "enable", "disable", "Allow ping for monitoring", 560000),
-            (7, "Management-Access", "port1", "loopback", "Admin-Hosts", "FW-Mgmt", "accept", "HTTPS SSH", "always", "disable", "enable", "all", "Management access", 15000),
-            (8, "Deny-All", "any", "any", "all", "all", "deny", "ALL", "always", "disable", "enable", "all", "Implicit deny rule", 45000),
+            (1, "Allow-LAN-to-Internet", [_obj("port2")], [_obj("port1")], [_obj("LAN-Net")], [_obj("all")], "accept", [_obj("ALL")], "always", "enable", "enable", "all", "Allow LAN users internet access", 125000),
+            (2, "VPN-Site-Traffic", [_obj("port2")], [_obj("vpn-tunnel")], [_obj("LAN-Net")], [_obj("Remote-Net")], "accept", [_obj("ALL")], "always", "disable", "enable", "all", "Inter-site VPN traffic", 89000),
+            (3, "Allow-DNS", [_obj("port2")], [_obj("port1")], [_obj("all")], [_obj("DNS-Servers")], "accept", [_obj("DNS")], "always", "enable", "enable", "utm", "DNS resolution", 340000),
+            (4, "Allow-HTTPS", [_obj("port2")], [_obj("port1")], [_obj("all")], [_obj("all")], "accept", [_obj("HTTPS")], "always", "enable", "enable", "all", "HTTPS traffic", 95000),
+            (5, "Block-Malware-Sites", [_obj("port2")], [_obj("port1")], [_obj("all")], [_obj("Malware-Block-List")], "deny", [_obj("ALL")], "always", "disable", "enable", "all", "Block known malware sites", 2300),
+            (6, "Allow-ICMP", [_obj("any")], [_obj("any")], [_obj("all")], [_obj("all")], "accept", [_obj("PING")], "always", "disable", "enable", "disable", "Allow ping for monitoring", 560000),
+            (7, "Management-Access", [_obj("port1")], [_obj("loopback")], [_obj("Admin-Hosts")], [_obj("FW-Mgmt")], "accept", [_obj("HTTPS"), _obj("SSH")], "always", "disable", "enable", "all", "Management access", 15000),
+            (8, "Deny-All", [_obj("any")], [_obj("any")], [_obj("all")], [_obj("all")], "deny", [_obj("ALL")], "always", "disable", "enable", "all", "Implicit deny rule", 45000),
         ]
 
         for device in db_devices:
@@ -332,11 +335,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(dashboard.router)
 app.include_router(devices.router)
 app.include_router(backups.router)
 app.include_router(tunnels.router)
 app.include_router(monitoring.router)
 app.include_router(policies.router)
+app.include_router(objects.router)
+app.include_router(cli.router)
 
 
 @app.get("/")
