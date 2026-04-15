@@ -121,6 +121,26 @@ export const cliService = {
     api.post(`/cli/${deviceId}/execute`, { command, vdom: vdom || 'root' }),
 };
 
+export const complianceService = {
+  getDevice: (deviceId: string) => api.get(`/compliance/${deviceId}`),
+  getAll: () => api.get('/compliance'),
+};
+
+export const logsService = {
+  getLogs: (deviceId: string, params?: {
+    vdom?: string;
+    log_source?: string;
+    log_type?: string;
+    rows?: number;
+    start?: number;
+  }) => api.get(`/logs/${deviceId}`, { params }),
+  getSources: (deviceId: string) => api.get(`/logs/${deviceId}/sources`),
+};
+
+export const fleetService = {
+  getPerformance: () => api.get('/monitoring/fleet-performance'),
+};
+
 export const objectService = {
   getAddresses: (deviceId: string, vdom?: string) =>
     api.get(`/objects/${deviceId}/addresses`, { params: { vdom } }),

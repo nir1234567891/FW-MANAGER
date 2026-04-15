@@ -125,6 +125,8 @@ export default function Routing() {
   const [activeTab, setActiveTab] = useState<SubTab>('interfaces');
   const [protocol, setProtocol] = useState<ProtocolType>('bgp');
   const [search, setSearch] = useState('');
+  const [routeSearch, setRouteSearch] = useState('');
+  const [routeTypeFilter, setRouteTypeFilter] = useState('all');
   const [loading, setLoading] = useState(true);
 
   const [realDevices, setRealDevices] = useState<DeviceInfo[]>([]);
@@ -296,6 +298,15 @@ export default function Routing() {
       }
     }
     return { total, byType };
+  }, [filteredDevices, routes]);
+
+  // All unique route types across all filtered devices
+  const allRouteTypes = useMemo(() => {
+    const types = new Set<string>();
+    for (const dev of filteredDevices) {
+      for (const r of routes[dev.id] || []) types.add(r.type);
+    }
+    return Array.from(types).sort();
   }, [filteredDevices, routes]);
 
   const bgpFiltered = useMemo(() => {
@@ -496,6 +507,7 @@ export default function Routing() {
       {/* ==================== ROUTING TABLE TAB ==================== */}
       {activeTab === 'routes' && (
         <>
+          {/* Stats row */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="glass-card p-4 flex items-center gap-3">
               <div className="p-2 bg-primary-400/10 rounded-lg"><Globe className="w-4 h-4 text-primary-400" /></div>
@@ -517,9 +529,63 @@ export default function Routing() {
             ))}
           </div>
 
+          {/* Route type filter + search bar */}
+          <div className="glass-card p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-slate-500 shrink-0">Filter by type:</span>
+              <button
+                onClick={() => setRouteTypeFilter('all')}
+                className={clsx(
+                  'text-xs px-2.5 py-1 rounded-full border font-medium transition-colors',
+                  routeTypeFilter === 'all'
+                    ? 'bg-primary-500/20 text-primary-300 border-primary-500/40'
+                    : 'border-dark-600 text-slate-400 hover:text-slate-200 hover:border-dark-500'
+                )}
+              >
+                All ({routeStats.total})
+              </button>
+              {allRouteTypes.map((type) => (
+                <button
+                  key={type}
+                  onClick={() => setRouteTypeFilter(type)}
+                  className={clsx(
+                    'text-xs px-2.5 py-1 rounded-full border font-medium transition-colors capitalize',
+                    routeTypeFilter === type
+                      ? clsx('border-transparent', routeTypeColor(type))
+                      : 'border-dark-600 text-slate-400 hover:text-slate-200 hover:border-dark-500'
+                  )}
+                >
+                  {type} ({routeStats.byType[type] ?? 0})
+                </button>
+              ))}
+              <div className="ml-auto relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
+                <input
+                  value={routeSearch}
+                  onChange={(e) => setRouteSearch(e.target.value)}
+                  placeholder="Search destination / interface…"
+                  className="input-dark text-sm !py-1 pl-8 w-64"
+                />
+              </div>
+            </div>
+          </div>
+
           {filteredDevices.map((dev) => {
-            const rts = routes[dev.id] || [];
-            if (rts.length === 0) return null;
+            const allRts = routes[dev.id] || [];
+            const rts = allRts.filter((r) => {
+              if (routeTypeFilter !== 'all' && r.type !== routeTypeFilter) return false;
+              if (routeSearch) {
+                const q = routeSearch.toLowerCase();
+                return (
+                  r.ip_mask.includes(q) ||
+                  r.gateway.includes(q) ||
+                  r.interface.toLowerCase().includes(q) ||
+                  r.type.toLowerCase().includes(q)
+                );
+              }
+              return true;
+            });
+            if (allRts.length === 0) return null;
             const isExpanded = expandedDevice === dev.id || deviceId !== 'all';
 
             return (
@@ -531,7 +597,10 @@ export default function Routing() {
                   <div className="flex items-center gap-3">
                     <Globe className="w-4 h-4 text-primary-400" />
                     <span className="text-sm font-semibold text-slate-100">{dev.name}</span>
-                    <span className="text-xs text-slate-500">{rts.length} routes</span>
+                    <span className="text-xs text-slate-500">{allRts.length} routes total</span>
+                    {rts.length !== allRts.length && (
+                      <span className="text-xs text-primary-400">{rts.length} shown</span>
+                    )}
                   </div>
                   {isExpanded ? <ChevronDown className="w-4 h-4 text-slate-400" /> : <ChevronRight className="w-4 h-4 text-slate-400" />}
                 </button>
@@ -549,10 +618,16 @@ export default function Routing() {
                         </tr>
                       </thead>
                       <tbody>
-                        {rts.map((r, i) => (
+                        {rts.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="text-center py-8 text-slate-500 text-xs">
+                              No routes match the current filter
+                            </td>
+                          </tr>
+                        ) : rts.map((r, i) => (
                           <tr key={i} className="border-t border-dark-700/50 table-row-hover">
                             <td className="px-4 py-2">
-                              <span className={clsx('text-[10px] font-medium px-2 py-0.5 rounded-full', routeTypeColor(r.type))}>
+                              <span className={clsx('text-[10px] font-medium px-2 py-0.5 rounded-full capitalize', routeTypeColor(r.type))}>
                                 {r.type}
                               </span>
                             </td>

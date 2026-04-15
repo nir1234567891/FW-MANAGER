@@ -270,6 +270,42 @@ class FortiGateAPI:
         secs = seconds % 60
         return f"{days} days {hours}:{mins:02d}:{secs:02d}"
 
+    async def get_ntp(self) -> dict[str, Any]:
+        """Get NTP configuration from CMDB. Returns ntpsync, type, ntpserver list."""
+        result = await self._get("/api/v2/cmdb/system/ntp")
+        return result.get("results", {})
+
+    async def get_dns(self) -> dict[str, Any]:
+        """Get DNS configuration from CMDB. Returns primary, secondary IPs."""
+        result = await self._get("/api/v2/cmdb/system/dns")
+        return result.get("results", {})
+
+    async def get_syslog_setting(self) -> dict[str, Any]:
+        """Get syslog forwarding settings. Returns {} if not configured."""
+        try:
+            result = await self._get("/api/v2/cmdb/log.syslogd/setting")
+            return result.get("results", {})
+        except Exception:
+            return {}
+
+    async def get_logs(
+        self,
+        log_source: str = "memory",
+        log_type: str = "event/system",
+        vdom: Optional[str] = None,
+        rows: int = 100,
+        start: int = 0,
+    ) -> dict[str, Any]:
+        """Fetch log entries from FortiGate.
+
+        log_source: memory | disk
+        log_type: event/system | event/vpn | traffic/forward | traffic/local | traffic/sniffer
+        Returns the full API response dict (results list + metadata).
+        """
+        path = f"/api/v2/log/{log_source}/{log_type}"
+        result = await self._get(path, params={"rows": rows, "start": start}, vdom=vdom)
+        return result
+
     async def get_full_device_info(self) -> dict[str, Any]:
         """Aggregate key device info in one call. Used for diagnostics."""
         info: dict[str, Any] = {}

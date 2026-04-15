@@ -13,7 +13,7 @@ from app.config import settings
 from app.database import engine, async_session, init_db, Base
 from app.models import Device, VDOM, VPNTunnel, Backup, Policy, Alert
 
-from app.routers import devices, backups, tunnels, monitoring, policies, dashboard, objects, cli
+from app.routers import devices, backups, tunnels, monitoring, policies, dashboard, objects, cli, compliance, logs
 from app.services.health_checker import health_check_loop
 
 logger = logging.getLogger(__name__)
@@ -343,6 +343,8 @@ app.include_router(monitoring.router)
 app.include_router(policies.router)
 app.include_router(objects.router)
 app.include_router(cli.router)
+app.include_router(compliance.router)
+app.include_router(logs.router)
 
 
 @app.get("/")

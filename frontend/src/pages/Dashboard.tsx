@@ -13,7 +13,7 @@ import StatusBadge from '@/components/StatusBadge';
 import type { Device, Alert } from '@/types';
 import { formatDistanceToNow } from 'date-fns';
 import { useScope } from '@/hooks/useScope';
-import { deviceService, monitoringService, dashboardService } from '@/services/api';
+import { deviceService, monitoringService, dashboardService, fleetService } from '@/services/api';
 import { mapBackendDevice } from '@/utils/mapDevice';
 import { useToast } from '@/components/Toast';
 
@@ -109,6 +109,7 @@ function LoadingSkeleton({ className = '' }: { className?: string }) {
 }
 
 const TIME_WINDOWS = [
+  { key: '1-min', label: '1m' },
   { key: '1-hour', label: '1h' },
   { key: '12-hour', label: '12h' },
   { key: '24-hour', label: '24h' },
@@ -127,7 +128,7 @@ export default function Dashboard() {
 
   const [resourceData, setResourceData] = useState<ResourcePoint[]>([]);
   const [resourceDevice, setResourceDevice] = useState<string>('');
-  const [resourceWindow, setResourceWindow] = useState('1-hour');
+  const [resourceWindow, setResourceWindow] = useState('1-min');
   const [resourceLoading, setResourceLoading] = useState(false);
 
   const fetchData = useCallback(async (silent = false) => {
@@ -135,19 +136,47 @@ export default function Dashboard() {
     else setRefreshing(true);
 
     try {
-      const [statsRes, devResult, alertResult] = await Promise.allSettled([
+      const [statsRes, devResult, alertResult, perfResult] = await Promise.allSettled([
         dashboardService.getOverview(),
         deviceService.getAll(),
         monitoringService.getAlerts(),
+        fleetService.getPerformance(),
       ]);
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let perfMap: Record<string, any> = {};
+      if (perfResult.status === 'fulfilled' && perfResult.value.data) {
+        perfMap = perfResult.value.data as Record<string, unknown>;
+      }
+
       if (statsRes.status === 'fulfilled') {
-        setStats(statsRes.value.data as DashboardStats);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const raw = statsRes.value.data as any;
+        // Merge live avg_cpu/avg_memory from fleet performance if available
+        const perfValues = Object.values(perfMap) as Array<{ cpu_usage: number; memory_usage: number; source: string }>;
+        const liveDevices = perfValues.filter((p) => p.source === 'live');
+        if (liveDevices.length > 0) {
+          const liveCpu = liveDevices.reduce((s, p) => s + (p.cpu_usage || 0), 0) / liveDevices.length;
+          const liveMem = liveDevices.reduce((s, p) => s + (p.memory_usage || 0), 0) / liveDevices.length;
+          raw.avg_cpu = Math.round(liveCpu * 10) / 10;
+          raw.avg_memory = Math.round(liveMem * 10) / 10;
+        }
+        setStats(raw as DashboardStats);
       }
 
       if (devResult.status === 'fulfilled' && Array.isArray(devResult.value.data)) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const mapped = (devResult.value.data as any[]).map(mapBackendDevice);
+        const mapped = (devResult.value.data as any[]).map((d) => {
+          const dev = mapBackendDevice(d);
+          // Overlay live performance data if available
+          const perf = perfMap[String(d.id)];
+          if (perf && perf.source === 'live') {
+            dev.cpu_usage = Math.round(perf.cpu_usage);
+            dev.memory_usage = Math.round(perf.memory_usage);
+            if (perf.session_count != null) dev.session_count = perf.session_count;
+          }
+          return dev;
+        });
         setDevices(mapped);
       }
 
@@ -208,7 +237,7 @@ export default function Dashboard() {
     }
   }, [resourceDevice, resourceWindow, fetchResourceMetrics]);
 
-  // Auto-refresh interval
+  // Auto-refresh interval — fetchData already includes fleet performance
   useEffect(() => {
     if (autoRefresh) {
       autoRefreshRef.current = setInterval(() => {
@@ -324,6 +353,7 @@ export default function Dashboard() {
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
               <Cpu className="w-4 h-4 text-primary-400" /> Resource Utilization
+              <span className="text-[10px] font-normal px-1.5 py-0.5 bg-emerald-500/10 text-emerald-400 rounded border border-emerald-500/20">LIVE</span>
             </h3>
             <div className="flex items-center gap-2">
               <select
@@ -369,8 +399,8 @@ export default function Dashboard() {
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                <XAxis dataKey="time" stroke="#475569" tick={{ fill: '#64748b', fontSize: 11 }} />
-                <YAxis stroke="#475569" tick={{ fill: '#64748b', fontSize: 11 }} domain={[0, 100]} unit="%" />
+                <XAxis dataKey="time" stroke="#475569" tick={{ fill: '#64748b', fontSize: 11 }} interval="preserveStartEnd" />
+                <YAxis stroke="#475569" tick={{ fill: '#64748b', fontSize: 11 }} unit="%" domain={([, dataMax]: [number, number]) => [0, Math.max(dataMax * 1.3, 10)]} />
                 <Tooltip content={<ResourceTooltip />} />
                 <Legend wrapperStyle={{ fontSize: 12, color: '#94a3b8' }} />
                 <Area type="monotone" dataKey="cpu" stroke="#22d3ee" fill="url(#gradCpu)" strokeWidth={2} name="CPU" />
@@ -381,8 +411,8 @@ export default function Dashboard() {
             <div className="flex items-center justify-center h-[280px] text-slate-500 text-sm">
               <div className="text-center">
                 <Activity className="w-8 h-8 mx-auto mb-2 text-slate-600" />
-                <p>No resource data available</p>
-                <p className="text-xs mt-1">Select an online device to view metrics</p>
+                <p>No resource history available</p>
+                <p className="text-xs mt-1 text-slate-600">Select an online device — data populates from live FortiGate API</p>
               </div>
             </div>
           )}
@@ -487,23 +517,25 @@ export default function Dashboard() {
                 <div className="space-y-1.5">
                   <div>
                     <div className="flex justify-between text-[10px] text-slate-500 mb-0.5">
-                      <span>CPU</span><span>{device.cpu_usage}%</span>
+                      <span>CPU</span>
+                      <span className={device.cpu_usage === 0 ? 'text-slate-600' : ''}>{device.cpu_usage}%</span>
                     </div>
                     <div className="h-1 bg-dark-900 rounded-full overflow-hidden">
                       <div
-                        className={`h-full rounded-full ${device.cpu_usage >= 80 ? 'bg-red-400' : device.cpu_usage >= 60 ? 'bg-amber-400' : 'bg-primary-400'}`}
-                        style={{ width: `${device.cpu_usage}%` }}
+                        className={`h-full rounded-full transition-all ${device.cpu_usage >= 80 ? 'bg-red-400' : device.cpu_usage >= 60 ? 'bg-amber-400' : 'bg-primary-400'}`}
+                        style={{ width: device.cpu_usage === 0 ? '2px' : `${device.cpu_usage}%`, opacity: device.cpu_usage === 0 ? 0.3 : 1 }}
                       />
                     </div>
                   </div>
                   <div>
                     <div className="flex justify-between text-[10px] text-slate-500 mb-0.5">
-                      <span>MEM</span><span>{device.memory_usage}%</span>
+                      <span>MEM</span>
+                      <span className={device.memory_usage === 0 ? 'text-slate-600' : ''}>{device.memory_usage}%</span>
                     </div>
                     <div className="h-1 bg-dark-900 rounded-full overflow-hidden">
                       <div
-                        className={`h-full rounded-full ${device.memory_usage >= 80 ? 'bg-red-400' : device.memory_usage >= 60 ? 'bg-amber-400' : 'bg-emerald-400'}`}
-                        style={{ width: `${device.memory_usage}%` }}
+                        className={`h-full rounded-full transition-all ${device.memory_usage >= 80 ? 'bg-red-400' : device.memory_usage >= 60 ? 'bg-amber-400' : 'bg-emerald-400'}`}
+                        style={{ width: device.memory_usage === 0 ? '2px' : `${device.memory_usage}%`, opacity: device.memory_usage === 0 ? 0.3 : 1 }}
                       />
                     </div>
                   </div>
@@ -557,40 +589,51 @@ export default function Dashboard() {
         <div className="glass-card p-5">
           <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
             <Activity className="w-4 h-4 text-primary-400" /> Fleet Performance
+            <span className="text-[10px] font-normal px-1.5 py-0.5 bg-emerald-500/10 text-emerald-400 rounded border border-emerald-500/20">LIVE</span>
           </h3>
           <div className="space-y-4">
             <div className="bg-dark-900/50 rounded-lg p-4">
               <div className="grid grid-cols-3 gap-4">
                 <div className="text-center">
-                  <div className="relative w-14 h-14 mx-auto mb-1">
-                    <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
-                      <circle cx="18" cy="18" r="16" fill="none" stroke="#1e293b" strokeWidth="3" />
-                      <circle cx="18" cy="18" r="16" fill="none"
-                        stroke={stats && stats.avg_cpu >= 80 ? '#f87171' : stats && stats.avg_cpu >= 60 ? '#fbbf24' : '#34d399'}
-                        strokeWidth="3" strokeLinecap="round"
-                        strokeDasharray={`${stats?.avg_cpu ?? 0} ${100 - (stats?.avg_cpu ?? 0)}`}
-                      />
-                    </svg>
-                    <span className="absolute inset-0 flex items-center justify-center text-sm font-bold text-slate-200">
-                      {stats?.avg_cpu ?? 0}%
-                    </span>
-                  </div>
+                  {(() => {
+                    const val = stats?.avg_cpu ?? 0;
+                    const arc = Math.max(val, val === 0 ? 0 : 2);
+                    const color = val >= 80 ? '#f87171' : val >= 60 ? '#fbbf24' : '#34d399';
+                    return (
+                      <div className="relative w-14 h-14 mx-auto mb-1">
+                        <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
+                          <circle cx="18" cy="18" r="16" fill="none" stroke="#1e293b" strokeWidth="3" />
+                          {val === 0 ? (
+                            <circle cx="18" cy="18" r="16" fill="none" stroke="#1e2940" strokeWidth="3" strokeDasharray="100 0" />
+                          ) : (
+                            <circle cx="18" cy="18" r="16" fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeDasharray={`${arc} ${100 - arc}`} />
+                          )}
+                        </svg>
+                        <span className="absolute inset-0 flex items-center justify-center text-sm font-bold text-slate-200">{val}%</span>
+                      </div>
+                    );
+                  })()}
                   <p className="text-[10px] text-slate-500">Avg CPU</p>
                 </div>
                 <div className="text-center">
-                  <div className="relative w-14 h-14 mx-auto mb-1">
-                    <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
-                      <circle cx="18" cy="18" r="16" fill="none" stroke="#1e293b" strokeWidth="3" />
-                      <circle cx="18" cy="18" r="16" fill="none"
-                        stroke={stats && stats.avg_memory >= 80 ? '#f87171' : stats && stats.avg_memory >= 60 ? '#fbbf24' : '#34d399'}
-                        strokeWidth="3" strokeLinecap="round"
-                        strokeDasharray={`${stats?.avg_memory ?? 0} ${100 - (stats?.avg_memory ?? 0)}`}
-                      />
-                    </svg>
-                    <span className="absolute inset-0 flex items-center justify-center text-sm font-bold text-slate-200">
-                      {stats?.avg_memory ?? 0}%
-                    </span>
-                  </div>
+                  {(() => {
+                    const val = stats?.avg_memory ?? 0;
+                    const arc = Math.max(val, val > 0 ? 2 : 0);
+                    const color = val >= 80 ? '#f87171' : val >= 60 ? '#fbbf24' : '#34d399';
+                    return (
+                      <div className="relative w-14 h-14 mx-auto mb-1">
+                        <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
+                          <circle cx="18" cy="18" r="16" fill="none" stroke="#1e293b" strokeWidth="3" />
+                          {val === 0 ? (
+                            <circle cx="18" cy="18" r="16" fill="none" stroke="#1e2940" strokeWidth="3" strokeDasharray="100 0" />
+                          ) : (
+                            <circle cx="18" cy="18" r="16" fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeDasharray={`${arc} ${100 - arc}`} />
+                          )}
+                        </svg>
+                        <span className="absolute inset-0 flex items-center justify-center text-sm font-bold text-slate-200">{val}%</span>
+                      </div>
+                    );
+                  })()}
                   <p className="text-[10px] text-slate-500">Avg Memory</p>
                 </div>
                 <div className="text-center">
@@ -608,10 +651,13 @@ export default function Dashboard() {
                   <div className="flex-1 flex items-center gap-2">
                     <div className="flex-1">
                       <div className="h-1.5 bg-dark-800 rounded-full overflow-hidden">
-                        <div className={clsx('h-full rounded-full', d.cpu_usage >= 80 ? 'bg-red-400' : d.cpu_usage >= 60 ? 'bg-amber-400' : 'bg-primary-400')} style={{ width: `${d.cpu_usage}%` }} />
+                        <div
+                          className={clsx('h-full rounded-full transition-all', d.cpu_usage >= 80 ? 'bg-red-400' : d.cpu_usage >= 60 ? 'bg-amber-400' : 'bg-primary-400')}
+                          style={{ width: d.cpu_usage === 0 ? '3px' : `${d.cpu_usage}%`, opacity: d.cpu_usage === 0 ? 0.3 : 1 }}
+                        />
                       </div>
                     </div>
-                    <span className="text-[10px] text-slate-500 w-10 text-right">{d.cpu_usage}%</span>
+                    <span className={clsx('text-[10px] w-10 text-right', d.cpu_usage === 0 ? 'text-slate-600' : 'text-slate-500')}>{d.cpu_usage}%</span>
                   </div>
                 </div>
               ))}
