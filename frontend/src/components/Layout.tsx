@@ -14,6 +14,7 @@ const pageTitles: Record<string, string> = {
   '/routing': 'Network',
   '/bulk-cli': 'Bulk CLI Commander',
   '/compliance': 'Compliance & Health',
+  '/logs': 'Logs',
   '/backups': 'Backups',
   '/monitoring': 'Monitoring',
   '/policies': 'Policies',
@@ -142,9 +143,19 @@ export default function Layout() {
       />
 
       <div className={clsx('transition-all duration-300', sidebarCollapsed ? 'ml-16' : 'ml-60')}>
-        <header className="sticky top-0 z-30 h-16 border-b border-dark-700/50 bg-dark-900/80 backdrop-blur-md flex items-center justify-between px-6">
+        <header
+          className="sticky top-0 z-30 h-16 flex items-center justify-between px-6 backdrop-blur-xl"
+          style={{
+            background: 'linear-gradient(90deg, rgba(10,16,32,0.92) 0%, rgba(13,21,38,0.88) 100%)',
+            borderBottom: '1px solid rgba(255,255,255,0.06)',
+            boxShadow: '0 1px 0 rgba(255,255,255,0.04), 0 4px 24px rgba(0,0,0,0.3)',
+          }}
+        >
           <div className="flex items-center gap-4">
-            <h2 className="text-lg font-semibold text-slate-100">{pageTitle}</h2>
+            <div>
+              <h2 className="text-base font-semibold text-slate-100 leading-tight">{pageTitle}</h2>
+              <p className="text-[10px] text-slate-600 leading-tight font-mono">{location.pathname}</p>
+            </div>
             <div className="hidden xl:flex items-center gap-2">
               <select
                 value={scope.deviceId}
@@ -229,7 +240,7 @@ export default function Layout() {
             ) : (
               <button
                 onClick={() => setSearchOpen(true)}
-                className="p-2 text-slate-400 hover:text-slate-200 hover:bg-dark-800 rounded-lg transition-colors"
+                className="p-2 text-slate-500 hover:text-slate-200 rounded-lg transition-colors hover:bg-white/[0.05]"
                 title="Search (Ctrl+K)"
               >
                 <Search className="w-5 h-5" />
@@ -238,24 +249,35 @@ export default function Layout() {
 
             <button
               onClick={() => navigate('/alerts')}
-              className="relative p-2 text-slate-400 hover:text-slate-200 hover:bg-dark-800 rounded-lg transition-colors"
+              className="relative p-2 text-slate-500 hover:text-slate-200 rounded-lg transition-colors hover:bg-white/[0.05]"
               title="View Alerts"
             >
               <Bell className="w-5 h-5" />
-              <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full" />
+              {alertCount > 0 && (
+                <span
+                  className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full"
+                  style={{ background: '#ef4444', boxShadow: '0 0 6px #ef4444' }}
+                />
+              )}
             </button>
 
-            <div className="w-px h-8 bg-dark-700" />
+            <div className="w-px h-6 bg-dark-700/60" />
 
             <div className="relative">
               <button
                 onClick={() => setAdminMenuOpen(!adminMenuOpen)}
-                className="flex items-center gap-2 p-1.5 hover:bg-dark-800 rounded-lg transition-colors"
+                className="flex items-center gap-2 p-1.5 rounded-lg transition-all hover:bg-white/[0.05]"
               >
-                <div className="w-8 h-8 bg-gradient-to-br from-primary-400 to-primary-600 rounded-full flex items-center justify-center">
+                <div
+                  className="w-8 h-8 rounded-full flex items-center justify-center"
+                  style={{
+                    background: 'linear-gradient(135deg, var(--accent-light), var(--accent-dark))',
+                    boxShadow: '0 0 12px var(--accent-glow)',
+                  }}
+                >
                   <User className="w-4 h-4 text-white" />
                 </div>
-                <span className="text-sm text-slate-300 hidden lg:block">Admin</span>
+                <span className="text-sm font-medium text-slate-300 hidden lg:block">Admin</span>
               </button>
 
               {adminMenuOpen && (
@@ -264,7 +286,7 @@ export default function Layout() {
                     className="fixed inset-0 z-40"
                     onClick={() => setAdminMenuOpen(false)}
                   />
-                  <div className="absolute right-0 top-full mt-2 w-56 bg-dark-800 border border-dark-700 rounded-lg shadow-xl z-50 overflow-hidden">
+                  <div className="absolute right-0 top-full mt-2 w-56 rounded-xl shadow-2xl z-50 overflow-hidden" style={{ background: '#111827', border: '1px solid rgba(255,255,255,0.1)', boxShadow: '0 20px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.05)' }}>
                     <div className="px-4 py-3 border-b border-dark-700">
                       <p className="text-sm font-medium text-slate-200">Admin User</p>
                       <p className="text-xs text-slate-400">admin@fortimanager.local</p>
@@ -298,7 +320,7 @@ export default function Layout() {
           </div>
         </header>
 
-        <main className="p-6">
+        <main className="p-6 relative z-10">
           <Outlet />
         </main>
       </div>

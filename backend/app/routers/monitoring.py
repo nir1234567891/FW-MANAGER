@@ -2,6 +2,7 @@
 
 Endpoints:
   GET  /api/monitoring/overview              — Fleet-wide status summary
+  GET  /api/monitoring/fleet-performance     — Live CPU/mem for all online devices
   GET  /api/monitoring/alerts                — List alerts (filterable)
   POST /api/monitoring/alerts/bulk-acknowledge — Bulk acknowledge (query: severity, device_id)
   DELETE /api/monitoring/alerts/acknowledged — Delete all acknowledged alerts
@@ -11,8 +12,9 @@ Endpoints:
   GET  /api/monitoring/{device_id}/performance — Live CPU/mem/disk/sessions
   GET  /api/monitoring/{device_id}/traffic   — Live interface stats + VPN byte counts
 
-Route order matters: fixed-path alert routes MUST come before {alert_id} parameterized routes.
+Route order matters: fixed-path routes MUST come before {device_id} parameterized routes.
 """
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -143,6 +145,58 @@ async def monitoring_overview(db: AsyncSession = Depends(get_db)):
             for d in devices
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Fleet-wide live performance (fixed path — must be before /{device_id}/*)
+# ---------------------------------------------------------------------------
+
+@router.get("/fleet-performance")
+async def get_fleet_performance(db: AsyncSession = Depends(get_db)):
+    """Get live CPU/memory for all online devices in parallel.
+
+    Returns a dict keyed by device_id (as string).
+    Falls back to DB values for devices that time out or error.
+    """
+    dev_result = await db.execute(select(Device))
+    devices = list(dev_result.scalars().all())
+
+    async def _fetch(device: Device) -> dict:
+        base = {
+            "device_id": device.id,
+            "device_name": device.name,
+            "status": device.status,
+            "cpu_usage": device.cpu_usage or 0.0,
+            "memory_usage": device.memory_usage or 0.0,
+            "disk_usage": device.disk_usage or 0.0,
+            "session_count": device.session_count or 0,
+            "source": "database",
+        }
+        if device.status == "offline":
+            return base
+        try:
+            api = FortiGateAPI(host=device.ip_address, port=device.port, api_key=device.api_key)
+            resource = await api.get_resource_usage()
+            if isinstance(resource, dict):
+                cpu_arr = resource.get("cpu", [])
+                mem_arr = resource.get("mem", [])
+                disk_arr = resource.get("disk", [])
+                sess_arr = resource.get("session", [])
+                if isinstance(cpu_arr, list) and cpu_arr:
+                    base["cpu_usage"] = float(cpu_arr[0].get("current", base["cpu_usage"]))
+                if isinstance(mem_arr, list) and mem_arr:
+                    base["memory_usage"] = float(mem_arr[0].get("current", base["memory_usage"]))
+                if isinstance(disk_arr, list) and disk_arr:
+                    base["disk_usage"] = float(disk_arr[0].get("current", base["disk_usage"]))
+                if isinstance(sess_arr, list) and sess_arr:
+                    base["session_count"] = int(sess_arr[0].get("current", base["session_count"]))
+                base["source"] = "live"
+        except Exception as exc:
+            logger.debug("Fleet perf fetch failed for %s: %s", device.name, exc)
+        return base
+
+    results = await asyncio.gather(*[_fetch(d) for d in devices])
+    return {str(r["device_id"]): r for r in results}
 
 
 # ---------------------------------------------------------------------------

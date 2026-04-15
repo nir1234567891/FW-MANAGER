@@ -12,6 +12,7 @@ import Alerts from '@/pages/Alerts';
 import Routing from '@/pages/Routing';
 import BulkCLI from '@/pages/BulkCLI';
 import Compliance from '@/pages/Compliance';
+import Logs from '@/pages/Logs';
 import Settings from '@/pages/Settings';
 import NotFound from '@/pages/NotFound';
 
@@ -27,6 +28,7 @@ export default function App() {
             <Route path="/routing" element={<Routing />} />
             <Route path="/bulk-cli" element={<BulkCLI />} />
             <Route path="/compliance" element={<Compliance />} />
+            <Route path="/logs" element={<Logs />} />
             <Route path="/backups" element={<Backups />} />
             <Route path="/monitoring" element={<Monitoring />} />
             <Route path="/policies" element={<Policies />} />
