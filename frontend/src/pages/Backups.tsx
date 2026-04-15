@@ -1,8 +1,8 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
   Download, Trash2, Eye, GitCompareArrows, DatabaseBackup, Plus, Clock,
-  Search, CheckSquare, Square, FileText, Server,
+  Search, CheckSquare, Square, Server, RefreshCw, Loader2, HardDrive,
 } from 'lucide-react';
 import ReactDiffViewer, { DiffMethod } from 'react-diff-viewer-continued';
 import Modal from '@/components/Modal';
@@ -12,146 +12,7 @@ import { clsx } from 'clsx';
 import { useScope } from '@/hooks/useScope';
 import { deviceService, backupService } from '@/services/api';
 import { mapBackendDevice } from '@/utils/mapDevice';
-
-const sampleConfig1 = `config system global
-    set hostname "FG-HQ-DC1"
-    set timezone "US/Eastern"
-    set admin-sport 443
-    set admin-ssh-port 22
-    set admintimeout 30
-end
-
-config system interface
-    edit "port1"
-        set vdom "root"
-        set ip 10.0.1.1 255.255.255.0
-        set allowaccess ping https ssh snmp
-        set type physical
-        set alias "WAN1"
-        set role wan
-    next
-    edit "port2"
-        set vdom "root"
-        set ip 172.16.0.1 255.255.255.0
-        set allowaccess ping https ssh
-        set type physical
-        set alias "LAN"
-        set role lan
-    next
-end
-
-config firewall policy
-    edit 1
-        set name "allow-internet"
-        set srcintf "port2"
-        set dstintf "port1"
-        set srcaddr "LAN_SUBNET"
-        set dstaddr "all"
-        set action accept
-        set schedule "always"
-        set service "ALL"
-        set nat enable
-        set logtraffic all
-    next
-    edit 2
-        set name "deny-all"
-        set srcintf "any"
-        set dstintf "any"
-        set srcaddr "all"
-        set dstaddr "all"
-        set action deny
-        set schedule "always"
-        set service "ALL"
-        set logtraffic all
-    next
-end`;
-
-const sampleConfig2 = `config system global
-    set hostname "FG-HQ-DC1"
-    set timezone "US/Eastern"
-    set admin-sport 8443
-    set admin-ssh-port 2222
-    set admintimeout 15
-    set admin-lockout-threshold 3
-end
-
-config system interface
-    edit "port1"
-        set vdom "root"
-        set ip 10.0.1.1 255.255.255.0
-        set allowaccess ping https ssh snmp fgfm
-        set type physical
-        set alias "WAN1"
-        set role wan
-    next
-    edit "port2"
-        set vdom "root"
-        set ip 172.16.0.1 255.255.255.0
-        set allowaccess ping https ssh
-        set type physical
-        set alias "LAN"
-        set role lan
-    next
-    edit "port3"
-        set vdom "DMZ"
-        set ip 192.168.1.1 255.255.255.0
-        set allowaccess ping https
-        set type physical
-        set alias "DMZ"
-    next
-end
-
-config firewall policy
-    edit 1
-        set name "allow-internet"
-        set srcintf "port2"
-        set dstintf "port1"
-        set srcaddr "LAN_SUBNET"
-        set dstaddr "all"
-        set action accept
-        set schedule "always"
-        set service "ALL"
-        set nat enable
-        set logtraffic all
-        set utm-status enable
-        set av-profile "default"
-        set ips-sensor "default"
-    next
-    edit 2
-        set name "dmz-to-internet"
-        set srcintf "port3"
-        set dstintf "port1"
-        set srcaddr "DMZ_SUBNET"
-        set dstaddr "all"
-        set action accept
-        set schedule "always"
-        set service "HTTP HTTPS DNS"
-        set nat enable
-        set logtraffic all
-    next
-    edit 3
-        set name "deny-all"
-        set srcintf "any"
-        set dstintf "any"
-        set srcaddr "all"
-        set dstaddr "all"
-        set action deny
-        set schedule "always"
-        set service "ALL"
-        set logtraffic all
-    next
-end`;
-
-const mockBackups: Backup[] = [
-  { id: 'b1', device_id: '1', device_name: 'FG-HQ-DC1', vdom: 'Full', backup_type: 'manual', file_size: 245760, file_hash: 'a3f2e8c1d4b5...', config_content: sampleConfig2, notes: 'Post-DMZ configuration', created_at: new Date(Date.now() - 3600000).toISOString() },
-  { id: 'b2', device_id: '1', device_name: 'FG-HQ-DC1', vdom: 'Full', backup_type: 'scheduled', file_size: 238592, file_hash: 'b7d1f3a2e6c4...', config_content: sampleConfig1, notes: 'Daily scheduled backup', created_at: new Date(Date.now() - 86400000).toISOString() },
-  { id: 'b3', device_id: '2', device_name: 'FG-HQ-DC2', vdom: 'Full', backup_type: 'scheduled', file_size: 241664, file_hash: 'c9e2a4b7d1f3...', config_content: sampleConfig1, notes: 'Daily scheduled backup', created_at: new Date(Date.now() - 86400000).toISOString() },
-  { id: 'b4', device_id: '3', device_name: 'FG-BRANCH-NYC', vdom: 'root', backup_type: 'manual', file_size: 128000, file_hash: 'd4f1e3c7a2b5...', config_content: sampleConfig1, notes: 'Pre-change backup', created_at: new Date(Date.now() - 172800000).toISOString() },
-  { id: 'b5', device_id: '4', device_name: 'FG-BRANCH-LON', vdom: 'Full', backup_type: 'scheduled', file_size: 134144, file_hash: 'e8a3b6d2f1c4...', config_content: sampleConfig1, notes: '', created_at: new Date(Date.now() - 259200000).toISOString() },
-  { id: 'b6', device_id: '1', device_name: 'FG-HQ-DC1', vdom: 'root', backup_type: 'vdom', file_size: 102400, file_hash: 'f2c4d7a1e3b6...', config_content: sampleConfig1, notes: 'Root VDOM only', created_at: new Date(Date.now() - 345600000).toISOString() },
-  { id: 'b7', device_id: '6', device_name: 'FG-BRANCH-SYD', vdom: 'Full', backup_type: 'manual', file_size: 118784, file_hash: 'a1b3c5d7e2f4...', config_content: sampleConfig1, notes: 'Before firmware upgrade', created_at: new Date(Date.now() - 604800000).toISOString() },
-  { id: 'b8', device_id: '3', device_name: 'FG-BRANCH-NYC', vdom: 'Full', backup_type: 'scheduled', file_size: 125952, file_hash: 'b2d4f6a1c3e5...', config_content: sampleConfig2, notes: '', created_at: new Date(Date.now() - 432000000).toISOString() },
-];
+import { useToast } from '@/components/Toast';
 
 function formatSize(bytes: number): string {
   if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(1)} MB`;
@@ -161,6 +22,7 @@ function formatSize(bytes: number): string {
 const typeColors: Record<string, string> = {
   manual: 'text-primary-400 bg-primary-400/10 border-primary-400/30',
   scheduled: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30',
+  auto: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30',
   vdom: 'text-purple-400 bg-purple-400/10 border-purple-400/30',
   full: 'text-amber-400 bg-amber-400/10 border-amber-400/30',
 };
@@ -196,46 +58,42 @@ const diffStyles = {
   },
 };
 
-const BACKUPS_STORAGE_KEY = 'fortimanager-pro-backups';
-
-function loadBackups(): Backup[] {
-  try {
-    const raw = localStorage.getItem(BACKUPS_STORAGE_KEY);
-    if (!raw) return mockBackups;
-    const parsed = JSON.parse(raw) as Backup[];
-    return Array.isArray(parsed) ? parsed : mockBackups;
-  } catch {
-    return mockBackups;
-  }
-}
-
 export default function Backups() {
   const location = useLocation();
   const { scope } = useScope();
+  const { addToast } = useToast();
   const selectedDeviceId = (location.state as { selectedDeviceId?: string } | null)?.selectedDeviceId;
+
   const [searchQuery, setSearchQuery] = useState('');
   const [deviceFilter, setDeviceFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [compareMode, setCompareMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [diffOpen, setDiffOpen] = useState(false);
+  const [diffContent1, setDiffContent1] = useState('');
+  const [diffContent2, setDiffContent2] = useState('');
   const [viewOpen, setViewOpen] = useState(false);
   const [viewContent, setViewContent] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [createDevice, setCreateDevice] = useState('');
   const [createVdom, setCreateVdom] = useState('full');
   const [createNotes, setCreateNotes] = useState('');
-  const [backups, setBackups] = useState<Backup[]>(loadBackups);
-  const [actionMessage, setActionMessage] = useState('');
+  const [backups, setBackups] = useState<Backup[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
   const [allDevices, setAllDevices] = useState<{ id: string; name: string; vdoms: string[] }[]>([]);
 
-  // Load real devices and backups from API
-  useEffect(() => {
-    // Load devices
-    deviceService.getAll()
-      .then((res) => {
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [devRes, bkpRes] = await Promise.allSettled([
+        deviceService.getAll(),
+        backupService.getAll(),
+      ]);
+
+      if (devRes.status === 'fulfilled') {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const list = res.data as any[];
+        const list = devRes.value.data as any[];
         if (Array.isArray(list) && list.length > 0) {
           setAllDevices(list.map((d: any) => {
             const dev = mapBackendDevice(d);
@@ -248,46 +106,36 @@ export default function Backups() {
             };
           }));
         }
-      })
-      .catch(() => { /* keep empty */ });
+      }
 
-    // Load backups from API
-    backupService.getAll()
-      .then(async (res) => {
+      if (bkpRes.status === 'fulfilled') {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const list = res.data as any[];
-        if (Array.isArray(list) && list.length > 0) {
-          // Get device names for each backup
-          const devicesRes = await deviceService.getAll();
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const devices = devicesRes.data as any[];
-          const deviceMap = new Map(devices.map((d: any) => [String(d.id), d.name]));
-
-          const realBackups: Backup[] = list.map((b: any) => ({
+        const list = bkpRes.value.data as any[];
+        if (Array.isArray(list)) {
+          setBackups(list.map((b: any) => ({
             id: String(b.id),
             device_id: String(b.device_id),
-            device_name: deviceMap.get(String(b.device_id)) || `Device ${b.device_id}`,
+            device_name: b.device_name || `Device ${b.device_id}`,
             vdom: b.vdom_name || 'Full',
             backup_type: b.backup_type || 'manual',
             file_size: b.file_size || 0,
             file_hash: b.config_hash || '',
-            config_content: '', // Will be loaded on demand
+            config_content: '',
             notes: b.notes || '',
             created_at: b.created_at || new Date().toISOString(),
-          }));
-
-          if (realBackups.length > 0) {
-            setBackups(realBackups);
-          }
+          })));
         }
-      })
-      .catch(() => { /* keep mock data */ });
+      }
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  // Device names from backups + all real devices (merged, unique)
-  const devices = useMemo(() => {
-    const fromBackups = backups.map((b) => b.device_name);
+  useEffect(() => { fetchData(); }, [fetchData]);
+
+  const deviceNames = useMemo(() => {
     const fromApi = allDevices.map((d) => d.name);
+    const fromBackups = backups.map((b) => b.device_name);
     return [...new Set([...fromApi, ...fromBackups])];
   }, [backups, allDevices]);
 
@@ -305,14 +153,6 @@ export default function Backups() {
     }
   }, [scope.deviceId, selectedDeviceId, backups]);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(BACKUPS_STORAGE_KEY, JSON.stringify(backups));
-    } catch {
-      // ignore localStorage errors
-    }
-  }, [backups]);
-
   const filtered = useMemo(() => {
     return backups.filter((b) => {
       const matchSearch = b.device_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -329,91 +169,121 @@ export default function Backups() {
     else if (selectedIds.length < 2) setSelectedIds([...selectedIds, id]);
   };
 
-  const handleCompare = () => {
-    if (selectedIds.length === 2) setDiffOpen(true);
-  };
-
-  const diffBackup1 = backups.find((b) => b.id === selectedIds[0]);
-  const diffBackup2 = backups.find((b) => b.id === selectedIds[1]);
-
-  const additions = 18;
-  const deletions = 3;
-  const modifications = 4;
-
-  const handleCreateBackup = async () => {
-    const deviceName = createDevice.trim();
-    if (!deviceName) {
-      setActionMessage('יש לבחור פיירוול לפני שמירה');
-      return;
-    }
-    const knownDevice = allDevices.find((d) => d.name === deviceName);
-    if (!knownDevice) {
-      setActionMessage('המכשיר לא נמצא');
-      return;
-    }
-
-    try {
-      setActionMessage('יוצר גיבוי...');
-      const vdomValue = createVdom === 'full' ? undefined : createVdom;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const res = await backupService.create({
-        device_id: knownDevice.id,
-        vdom: vdomValue,
-        notes: createNotes.trim(),
-      }) as any;
-
-      // Fetch the backup content from the server
-      let configContent = '';
-      if (res.data?.id) {
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const contentRes = await backupService.getContent(String(res.data.id)) as any;
-          configContent = contentRes.data?.content || '';
-        } catch {
-          configContent = 'Failed to load backup content';
-        }
-      }
-
-      const newBackup: Backup = {
-        id: String(res.data?.id || Date.now()),
-        device_id: knownDevice.id,
-        device_name: deviceName,
-        vdom: vdomValue || 'Full',
-        backup_type: res.data?.backup_type || 'manual',
-        file_size: res.data?.file_size || 0,
-        file_hash: res.data?.config_hash || '',
-        config_content: configContent,
-        notes: createNotes.trim(),
-        created_at: res.data?.created_at || new Date().toISOString(),
-      };
-      setBackups((prev) => [newBackup, ...prev]);
-      setCreateOpen(false);
-      setCreateVdom('full');
-      setCreateNotes('');
-      setSelectedIds([]);
-      setActionMessage(`הקונפיגורציה נשמרה בהצלחה עבור ${deviceName}`);
-      setTimeout(() => setActionMessage(''), 3000);
-    } catch (err) {
-      setActionMessage('שגיאה ביצירת הגיבוי');
-      setTimeout(() => setActionMessage(''), 3000);
-    }
-  };
-
   const loadBackupContent = async (backup: Backup): Promise<string> => {
-    if (backup.config_content) {
-      return backup.config_content;
-    }
+    if (backup.config_content) return backup.config_content;
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const res = await backupService.getContent(backup.id) as any;
       const content = res.data?.content || '';
-      // Update the backup in state with the loaded content
       setBackups((prev) =>
         prev.map((b) => (b.id === backup.id ? { ...b, config_content: content } : b))
       );
       return content;
     } catch {
       return 'Failed to load backup content from server';
+    }
+  };
+
+  const handleCompare = async () => {
+    if (selectedIds.length !== 2) return;
+    const b1 = backups.find((b) => b.id === selectedIds[0]);
+    const b2 = backups.find((b) => b.id === selectedIds[1]);
+    if (!b1 || !b2) return;
+
+    setActionLoading(true);
+    try {
+      const [c1, c2] = await Promise.all([
+        loadBackupContent(b1),
+        loadBackupContent(b2),
+      ]);
+      setDiffContent1(c1);
+      setDiffContent2(c2);
+      setDiffOpen(true);
+    } catch {
+      addToast('error', 'Failed to load backup content for comparison');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const diffBackup1 = backups.find((b) => b.id === selectedIds[0]);
+  const diffBackup2 = backups.find((b) => b.id === selectedIds[1]);
+
+  const handleCreateBackup = async () => {
+    const deviceName = createDevice.trim();
+    if (!deviceName) {
+      addToast('warning', 'Please select a device');
+      return;
+    }
+    const knownDevice = allDevices.find((d) => d.name === deviceName);
+    if (!knownDevice) {
+      addToast('error', 'Device not found');
+      return;
+    }
+
+    setActionLoading(true);
+    try {
+      const vdomValue = createVdom === 'full' ? undefined : createVdom;
+      await backupService.create({
+        device_id: knownDevice.id,
+        vdom: vdomValue,
+        notes: createNotes.trim(),
+      });
+      addToast('success', `Backup created for ${deviceName}`);
+      setCreateOpen(false);
+      setCreateVdom('full');
+      setCreateNotes('');
+      await fetchData();
+    } catch {
+      addToast('error', 'Failed to create backup');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDelete = async (backup: Backup) => {
+    try {
+      await backupService.delete(backup.id);
+      setBackups((prev) => prev.filter((b) => b.id !== backup.id));
+      addToast('success', `Backup deleted: ${backup.filename || backup.id}`);
+    } catch {
+      addToast('error', 'Failed to delete backup');
+    }
+  };
+
+  const handleAutoBackup = async () => {
+    setActionLoading(true);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = await backupService.autoBackup() as any;
+      const data = res.data;
+      addToast(
+        data?.failed > 0 ? 'warning' : 'success',
+        data?.message || 'Auto-backup complete',
+      );
+      await fetchData();
+    } catch {
+      addToast('error', 'Auto-backup failed');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleBackupAll = async () => {
+    setActionLoading(true);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = await backupService.backupAll() as any;
+      const data = res.data;
+      addToast(
+        data?.failed > 0 ? 'warning' : 'success',
+        data?.message || 'Bulk backup complete',
+      );
+      await fetchData();
+    } catch {
+      addToast('error', 'Bulk backup failed');
+    } finally {
+      setActionLoading(false);
     }
   };
 
@@ -433,13 +303,19 @@ export default function Backups() {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      setActionMessage(`הקובץ ירד: ${fileName}`);
-      setTimeout(() => setActionMessage(''), 2500);
+      addToast('success', `Downloaded: ${fileName}`);
     } catch {
-      setActionMessage('הורדת הקובץ נכשלה');
-      setTimeout(() => setActionMessage(''), 2500);
+      addToast('error', 'Download failed');
     }
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="w-8 h-8 animate-spin text-primary-400" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -456,12 +332,13 @@ export default function Backups() {
           </div>
           <select value={deviceFilter} onChange={(e) => setDeviceFilter(e.target.value)} className="input-dark w-auto text-sm">
             <option value="all">All Devices</option>
-            {devices.map((d) => <option key={d} value={d}>{d}</option>)}
+            {deviceNames.map((d) => <option key={d} value={d}>{d}</option>)}
           </select>
           <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="input-dark w-auto text-sm">
             <option value="all">All Types</option>
             <option value="manual">Manual</option>
             <option value="scheduled">Scheduled</option>
+            <option value="auto">Auto</option>
             <option value="vdom">VDOM</option>
           </select>
         </div>
@@ -471,20 +348,26 @@ export default function Backups() {
               <span className="text-xs text-slate-400">{selectedIds.length}/2 selected</span>
               <button
                 onClick={handleCompare}
-                disabled={selectedIds.length !== 2}
+                disabled={selectedIds.length !== 2 || actionLoading}
                 className="btn-primary text-sm"
               >
-                <GitCompareArrows className="w-4 h-4" /> Compare Selected
+                {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <GitCompareArrows className="w-4 h-4" />} Compare
               </button>
               <button onClick={() => { setCompareMode(false); setSelectedIds([]); }} className="btn-secondary text-sm">Cancel</button>
             </>
           ) : (
             <>
+              <button onClick={() => fetchData()} className="btn-secondary text-sm">
+                <RefreshCw className="w-4 h-4" /> Refresh
+              </button>
               <button onClick={() => setCompareMode(true)} className="btn-secondary text-sm">
                 <GitCompareArrows className="w-4 h-4" /> Compare
               </button>
-              <button className="btn-secondary text-sm">
-                <Clock className="w-4 h-4" /> Auto Backup
+              <button onClick={handleAutoBackup} className="btn-secondary text-sm" disabled={actionLoading}>
+                {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Clock className="w-4 h-4" />} Auto Backup
+              </button>
+              <button onClick={handleBackupAll} className="btn-secondary text-sm" disabled={actionLoading}>
+                {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <HardDrive className="w-4 h-4" />} Backup All
               </button>
               <button onClick={() => setCreateOpen(true)} className="btn-primary text-sm">
                 <Plus className="w-4 h-4" /> Backup Now
@@ -492,9 +375,6 @@ export default function Backups() {
             </>
           )}
         </div>
-        {actionMessage && (
-          <div className="text-xs text-emerald-400">{actionMessage}</div>
-        )}
       </div>
 
       <div className="glass-card overflow-hidden">
@@ -540,12 +420,12 @@ export default function Backups() {
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    <span className={clsx('inline-block px-2 py-0.5 text-xs rounded-full border', typeColors[backup.backup_type])}>
+                    <span className={clsx('inline-block px-2 py-0.5 text-xs rounded-full border', typeColors[backup.backup_type] || typeColors.manual)}>
                       {backup.backup_type}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-xs text-slate-300">{formatSize(backup.file_size)}</td>
-                  <td className="px-4 py-3 text-xs font-mono text-slate-500">{backup.file_hash}</td>
+                  <td className="px-4 py-3 text-xs font-mono text-slate-500">{backup.file_hash ? backup.file_hash.slice(0, 12) + '...' : '—'}</td>
                   <td className="px-4 py-3 text-xs text-slate-400 max-w-[200px] truncate">{backup.notes || '—'}</td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1">
@@ -567,7 +447,11 @@ export default function Backups() {
                       >
                         <Eye className="w-3.5 h-3.5" />
                       </button>
-                      <button className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-dark-700 rounded transition-colors">
+                      <button
+                        onClick={() => handleDelete(backup)}
+                        className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-dark-700 rounded transition-colors"
+                        title="Delete backup"
+                      >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
@@ -589,17 +473,6 @@ export default function Backups() {
       <Modal isOpen={diffOpen} onClose={() => setDiffOpen(false)} title="Configuration Comparison" size="full">
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-emerald-400 font-medium">+{additions}</span> additions
-              </div>
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-red-400 font-medium">-{deletions}</span> deletions
-              </div>
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-amber-400 font-medium">~{modifications}</span> modifications
-              </div>
-            </div>
             <div className="text-xs text-slate-500">
               {diffBackup1?.device_name} • {diffBackup1 && format(new Date(diffBackup1.created_at), 'MMM d, HH:mm')}
               {' vs '}
@@ -608,8 +481,8 @@ export default function Backups() {
           </div>
           <div className="border border-dark-700 rounded-lg overflow-hidden text-xs">
             <ReactDiffViewer
-              oldValue={diffBackup2?.config_content || ''}
-              newValue={diffBackup1?.config_content || ''}
+              oldValue={diffContent2}
+              newValue={diffContent1}
               splitView={true}
               useDarkTheme={true}
               styles={diffStyles}
@@ -623,7 +496,7 @@ export default function Backups() {
 
       <Modal isOpen={viewOpen} onClose={() => setViewOpen(false)} title="Configuration View" size="xl">
         <div className="bg-dark-900 rounded-lg p-4 font-mono text-xs text-slate-300 whitespace-pre overflow-auto max-h-[60vh] leading-relaxed">
-          {viewContent}
+          {viewContent || 'No content available'}
         </div>
       </Modal>
 
@@ -634,8 +507,8 @@ export default function Backups() {
         footer={
           <>
             <button onClick={() => setCreateOpen(false)} className="btn-secondary text-sm">Cancel</button>
-            <button onClick={handleCreateBackup} className="btn-primary text-sm">
-              <DatabaseBackup className="w-4 h-4" /> Create Backup
+            <button onClick={handleCreateBackup} className="btn-primary text-sm" disabled={actionLoading}>
+              {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <DatabaseBackup className="w-4 h-4" />} Create Backup
             </button>
           </>
         }
@@ -645,7 +518,7 @@ export default function Backups() {
             <label className="block text-sm text-slate-300 mb-1.5">Device</label>
             <select value={createDevice} onChange={(e) => setCreateDevice(e.target.value)} className="input-dark">
               <option value="">Select a device...</option>
-              {devices.map((d) => <option key={d} value={d}>{d}</option>)}
+              {allDevices.map((d) => <option key={d.id} value={d.name}>{d.name}</option>)}
             </select>
           </div>
           <div>

@@ -19,23 +19,16 @@ from app.database import async_session
 from app.models import Alert, Device
 from app.services.fortigate_api import FortiGateAPI
 from app.services.tunnel_mapper import discover_tunnels
+from app.services.utils import (
+    extract_current,
+    build_model_name,
+    CPU_HIGH_THRESHOLD,
+    CPU_CRITICAL_THRESHOLD,
+    MEM_HIGH_THRESHOLD,
+    MEM_CRITICAL_THRESHOLD,
+)
 
 logger = logging.getLogger(__name__)
-
-# Thresholds — mirror the values in monitoring.py
-CPU_HIGH_THRESHOLD = 85.0
-CPU_CRITICAL_THRESHOLD = 95.0
-MEM_HIGH_THRESHOLD = 85.0
-MEM_CRITICAL_THRESHOLD = 95.0
-
-
-def _extract_current(resource_list) -> int:
-    """Extract 'current' value from resource/usage list format."""
-    if isinstance(resource_list, list) and resource_list:
-        first = resource_list[0]
-        if isinstance(first, dict):
-            return int(first.get("current", 0))
-    return 0
 
 
 async def _create_alert_if_new(
@@ -102,16 +95,9 @@ async def check_device_health(device: Device, db: AsyncSession) -> None:
         if status_data.get("hostname"):
             device.hostname = status_data["hostname"]
 
-        # Build friendly model name: "FortiGateRugged 60F" (not just code "FGR60F")
-        model_name = status_data.get("model_name", "")
-        model_number = status_data.get("model_number", "")
-        model_code = status_data.get("model", "")
-        if model_name and model_number:
-            device.model = f"{model_name} {model_number}"
-        elif model_name:
-            device.model = model_name
-        elif model_code:
-            device.model = model_code
+        built_model = build_model_name(status_data)
+        if built_model:
+            device.model = built_model
 
         # --- 2. Resource usage (CPU %, Memory %, Disk %, Session count) ---
         # Single source of truth: monitor/system/resource/usage
@@ -119,10 +105,10 @@ async def check_device_health(device: Device, db: AsyncSession) -> None:
         try:
             resource = await api.get_resource_usage()
             if isinstance(resource, dict):
-                device.cpu_usage = float(_extract_current(resource.get("cpu")))
-                device.memory_usage = float(_extract_current(resource.get("mem")))
-                device.disk_usage = float(_extract_current(resource.get("disk")))
-                device.session_count = _extract_current(resource.get("session"))
+                device.cpu_usage = float(extract_current(resource.get("cpu")))
+                device.memory_usage = float(extract_current(resource.get("mem")))
+                device.disk_usage = float(extract_current(resource.get("disk")))
+                device.session_count = extract_current(resource.get("session"))
         except Exception as exc:
             logger.debug("Resource usage fetch failed for %s: %s", device.name, exc)
 
@@ -231,8 +217,11 @@ async def health_check_loop() -> None:
                     logger.info("No devices to check")
                     continue
 
+                await asyncio.gather(
+                    *(check_device_health(d, db) for d in devices),
+                    return_exceptions=True,
+                )
                 for device in devices:
-                    await check_device_health(device, db)
                     device.updated_at = datetime.now(timezone.utc)
 
                 await db.commit()

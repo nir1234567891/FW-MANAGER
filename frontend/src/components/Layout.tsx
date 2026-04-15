@@ -1,16 +1,17 @@
 import { useState, useEffect } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { Search, Bell, User, X, Settings, LogOut, UserCircle } from 'lucide-react';
+import { Search, Bell, User, X, Settings, LogOut } from 'lucide-react';
 import { clsx } from 'clsx';
 import Sidebar from './Sidebar';
 import { useSettings } from '../hooks/useSettings';
 import { useScope } from '../hooks/useScope';
+import { monitoringService, deviceService } from '../services/api';
 
 const pageTitles: Record<string, string> = {
   '/': 'Dashboard',
   '/devices': 'Devices',
   '/tunnel-map': 'Tunnel Map',
-  '/routing': 'Routing & Interfaces',
+  '/routing': 'Network',
   '/bulk-cli': 'Bulk CLI Commander',
   '/compliance': 'Compliance & Health',
   '/backups': 'Backups',
@@ -28,9 +29,24 @@ export default function Layout() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [adminMenuOpen, setAdminMenuOpen] = useState(false);
+  const [alertCount, setAlertCount] = useState(0);
+  const [deviceCount, setDeviceCount] = useState(0);
   const location = useLocation();
   const navigate = useNavigate();
   const pageTitle = pageTitles[location.pathname] || settings.appName;
+
+  useEffect(() => {
+    monitoringService.getAlerts({ acknowledged: false })
+      .then((res) => {
+        if (Array.isArray(res.data)) setAlertCount(res.data.length);
+      })
+      .catch(() => {});
+    deviceService.getAll()
+      .then((res) => {
+        if (Array.isArray(res.data)) setDeviceCount(res.data.length);
+      })
+      .catch(() => {});
+  }, [location.pathname]);
 
   // Search functionality
   const handleSearch = async (query: string) => {
@@ -121,8 +137,8 @@ export default function Layout() {
       <Sidebar
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
-        alertCount={5}
-        deviceCount={6}
+        alertCount={alertCount}
+        deviceCount={deviceCount}
       />
 
       <div className={clsx('transition-all duration-300', sidebarCollapsed ? 'ml-16' : 'ml-60')}>

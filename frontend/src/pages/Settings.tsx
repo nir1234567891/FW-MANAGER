@@ -75,7 +75,7 @@ function SettingsSelect({ label, value, onChange, options }: {
 }
 
 export default function Settings() {
-  const { settings: savedSettings, setSettings, resetSettings, defaultSettings } = useSettings();
+  const { settings: savedSettings, setSettings, updateSetting, resetSettings, defaultSettings } = useSettings();
 
   const [draft, setDraft] = useState<AppSettings>(savedSettings);
   const [saved, setSaved] = useState(false);
@@ -93,9 +93,9 @@ export default function Settings() {
   const update = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     const next = { ...draft, [key]: value };
     setDraft(next);
-    // Apply visual changes (dark mode, accent) immediately as live preview
+    // Visual settings auto-save immediately to localStorage so they persist after F5
     if (key === 'darkMode' || key === 'accentColor') {
-      applyTheme(next);
+      updateSetting(key, value);
     }
   };
 
@@ -224,7 +224,7 @@ export default function Settings() {
         <div className="flex items-center justify-between py-2">
           <div>
             <p className="text-sm text-slate-200">Color Scheme</p>
-            <p className="text-xs text-slate-500 mt-0.5">Switch between dark and light interface</p>
+            <p className="text-xs text-slate-500 mt-0.5">Switch between dark and light interface — <span className="text-emerald-500">auto-saved</span></p>
           </div>
           <div className="flex items-center gap-1 p-1 bg-dark-900 rounded-xl border border-dark-600">
             <button
@@ -254,7 +254,10 @@ export default function Settings() {
 
         {/* Accent color picker */}
         <div className="flex items-center gap-4 pt-1">
-          <p className="text-sm text-slate-300 shrink-0">Accent Color</p>
+          <div className="shrink-0">
+            <p className="text-sm text-slate-300">Accent Color</p>
+            <p className="text-[10px] text-emerald-500 mt-0.5">Auto-saved</p>
+          </div>
           <div className="flex gap-2.5 flex-wrap">
             {[
               { color: '#06b6d4', name: 'Cyan'   },

@@ -1,28 +1,15 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   Bell, AlertTriangle, XCircle, Info, CheckCircle2, Check,
   CheckCheck, RefreshCw, Wifi, WifiOff, Cpu, Shield, HardDrive,
-  Activity,
+  Activity, Loader2, Trash2, Scan,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import type { Alert } from '@/types';
 import { formatDistanceToNow } from 'date-fns';
 import { useScope } from '@/hooks/useScope';
-
-const mockAlerts: Alert[] = [
-  { id: 'a1', device_id: '5', device_name: 'FG-BRANCH-TKY', severity: 'critical', type: 'device_down', message: 'Device unreachable — connection timeout after 3 consecutive retries. Last successful contact: 1 hour ago.', acknowledged: false, created_at: new Date(Date.now() - 1800000).toISOString() },
-  { id: 'a2', device_id: '6', device_name: 'FG-BRANCH-SYD', severity: 'critical', type: 'high_memory', message: 'Memory usage at 91% — exceeds critical threshold of 90%. Risk of service degradation or device reboot.', acknowledged: false, created_at: new Date(Date.now() - 2400000).toISOString() },
-  { id: 'a3', device_id: '6', device_name: 'FG-BRANCH-SYD', severity: 'high', type: 'high_cpu', message: 'CPU usage sustained above 85% for 15 minutes (currently 87%). Investigate running processes.', acknowledged: false, created_at: new Date(Date.now() - 3600000).toISOString() },
-  { id: 'a4', device_id: '1', device_name: 'FG-HQ-DC1', severity: 'high', type: 'tunnel_down', message: 'IPSec tunnel "HQ-DC1-to-TKY" is down. Phase 1 negotiation failed — peer unreachable.', acknowledged: false, created_at: new Date(Date.now() - 3600000).toISOString() },
-  { id: 'a5', device_id: '3', device_name: 'FG-BRANCH-NYC', severity: 'medium', type: 'tunnel_flap', message: 'VPN tunnel "NYC-to-HQ" flapped 3 times in the last hour. Possible WAN instability.', acknowledged: true, created_at: new Date(Date.now() - 7200000).toISOString() },
-  { id: 'a6', device_id: '6', device_name: 'FG-BRANCH-SYD', severity: 'medium', type: 'high_disk', message: 'Disk usage at 78% — approaching warning threshold of 80%. Consider cleanup or expansion.', acknowledged: false, created_at: new Date(Date.now() - 14400000).toISOString() },
-  { id: 'a7', device_id: '6', device_name: 'FG-BRANCH-SYD', severity: 'low', type: 'firmware_update', message: 'Firmware update available: v7.4.3 (current: v7.2.8). Includes security patches and performance improvements.', acknowledged: false, created_at: new Date(Date.now() - 86400000).toISOString() },
-  { id: 'a8', device_id: '4', device_name: 'FG-BRANCH-LON', severity: 'low', type: 'config_change', message: 'Configuration changed by admin "netops" at 14:32 UTC. 3 firewall policies modified.', acknowledged: true, created_at: new Date(Date.now() - 43200000).toISOString() },
-  { id: 'a9', device_id: '1', device_name: 'FG-HQ-DC1', severity: 'info', type: 'backup_success', message: 'Scheduled backup completed successfully. Configuration saved (245 KB).', acknowledged: true, created_at: new Date(Date.now() - 86400000).toISOString() },
-  { id: 'a10', device_id: '2', device_name: 'FG-HQ-DC2', severity: 'info', type: 'ha_sync', message: 'HA configuration synchronized successfully with FG-HQ-DC1. All checksums match.', acknowledged: true, created_at: new Date(Date.now() - 172800000).toISOString() },
-  { id: 'a11', device_id: '1', device_name: 'FG-HQ-DC1', severity: 'medium', type: 'certificate_expiry', message: 'SSL certificate for "vpn.company.com" expires in 14 days. Renewal recommended.', acknowledged: false, created_at: new Date(Date.now() - 28800000).toISOString() },
-  { id: 'a12', device_id: '3', device_name: 'FG-BRANCH-NYC', severity: 'low', type: 'license_warning', message: 'FortiGuard Web Filter license expires in 30 days. Contact Fortinet for renewal.', acknowledged: false, created_at: new Date(Date.now() - 259200000).toISOString() },
-];
+import { monitoringService } from '@/services/api';
+import { useToast } from '@/components/Toast';
 
 type Severity = 'all' | 'critical' | 'high' | 'medium' | 'low' | 'info';
 
@@ -36,17 +23,17 @@ const severityConfig: Record<string, { color: string; border: string; bg: string
 
 const typeIcons: Record<string, React.ElementType> = {
   device_down: WifiOff,
-  high_cpu: Cpu,
-  high_memory: Activity,
-  high_disk: HardDrive,
-  tunnel_down: WifiOff,
-  tunnel_flap: Wifi,
-  firmware_update: Shield,
-  config_change: Shield,
-  backup_success: CheckCircle2,
-  ha_sync: RefreshCw,
-  certificate_expiry: Shield,
+  cpu_high: Cpu, cpu_critical: Cpu,
+  mem_high: Activity, mem_critical: Activity,
+  high_cpu: Cpu, high_memory: Activity, high_disk: HardDrive,
+  tunnel_down: WifiOff, tunnel_flap: Wifi,
+  firmware_update: Shield, config_change: Shield,
+  backup_success: CheckCircle2, backup_complete: CheckCircle2,
+  ha_sync: RefreshCw, ha_warning: RefreshCw,
+  certificate_expiry: Shield, cert_expiry: Shield,
   license_warning: Bell,
+  memory_warning: Activity,
+  auth_info: Shield,
 };
 
 const tabs: { key: Severity; label: string }[] = [
@@ -60,8 +47,37 @@ const tabs: { key: Severity; label: string }[] = [
 
 export default function Alerts() {
   const { scope } = useScope();
+  const { addToast } = useToast();
   const [activeTab, setActiveTab] = useState<Severity>('all');
-  const [alerts, setAlerts] = useState(mockAlerts);
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
+
+  const fetchAlerts = async () => {
+    try {
+      const res = await monitoringService.getAlerts();
+      if (Array.isArray(res.data)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        setAlerts(res.data.map((a: any) => ({
+          id: String(a.id),
+          device_id: String(a.device_id),
+          device_name: a.device_name || `Device ${a.device_id}`,
+          severity: a.severity || 'info',
+          type: a.alert_type || a.type || 'unknown',
+          message: a.message || '',
+          acknowledged: a.acknowledged || false,
+          created_at: a.created_at || new Date().toISOString(),
+        })));
+      }
+    } catch {
+      addToast('error', 'Failed to load alerts');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchAlerts(); }, []);
+
   const scopedAlerts = useMemo(() => (
     scope.deviceId === 'all' ? alerts : alerts.filter((a) => a.device_id === scope.deviceId)
   ), [alerts, scope.deviceId]);
@@ -74,26 +90,90 @@ export default function Alerts() {
   const unackCount = scopedAlerts.filter((a) => !a.acknowledged).length;
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
-    for (const a of scopedAlerts) {
-      c[a.severity] = (c[a.severity] || 0) + 1;
-    }
+    for (const a of scopedAlerts) c[a.severity] = (c[a.severity] || 0) + 1;
     return c;
   }, [scopedAlerts]);
 
-  const handleAcknowledge = (id: string) => {
-    setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, acknowledged: true } : a)));
+  const handleAcknowledge = async (id: string) => {
+    try {
+      await monitoringService.acknowledgeAlert(id);
+      setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, acknowledged: true } : a)));
+      addToast('success', 'Alert acknowledged');
+    } catch {
+      addToast('error', 'Failed to acknowledge alert');
+    }
   };
 
-  const handleAcknowledgeAll = () => {
-    setAlerts((prev) => prev.map((a) => ({ ...a, acknowledged: true })));
+  const handleDelete = async (id: string) => {
+    try {
+      await monitoringService.deleteAlert(id);
+      setAlerts((prev) => prev.filter((a) => a.id !== id));
+      addToast('success', 'Alert deleted');
+    } catch {
+      addToast('error', 'Failed to delete alert');
+    }
   };
+
+  const handleAcknowledgeAll = async () => {
+    setActionLoading(true);
+    try {
+      await monitoringService.bulkAcknowledge();
+      setAlerts((prev) => prev.map((a) => ({ ...a, acknowledged: true })));
+      addToast('success', 'All alerts acknowledged');
+    } catch {
+      addToast('error', 'Failed to acknowledge alerts');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDeleteAcknowledged = async () => {
+    setActionLoading(true);
+    try {
+      const res = await monitoringService.deleteAcknowledged();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const deleted = (res.data as any).deleted || 0;
+      setAlerts((prev) => prev.filter((a) => !a.acknowledged));
+      addToast('success', `Deleted ${deleted} acknowledged alert(s)`);
+    } catch {
+      addToast('error', 'Failed to delete acknowledged alerts');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleEvaluate = async () => {
+    setActionLoading(true);
+    try {
+      const res = await monitoringService.evaluate();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = res.data as any;
+      addToast(
+        'success',
+        `Scan complete: ${result.devices_checked ?? 0} devices checked, ${result.alerts_created ?? 0} new alerts`,
+      );
+      await fetchAlerts();
+    } catch {
+      addToast('error', 'Health evaluation failed');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="w-8 h-8 animate-spin text-primary-400" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4 animate-fade-in">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div className="flex items-center gap-3 flex-wrap">
           {tabs.map((tab) => {
-              const count = tab.key === 'all' ? scopedAlerts.length : (counts[tab.key] || 0);
+            const count = tab.key === 'all' ? scopedAlerts.length : (counts[tab.key] || 0);
             return (
               <button
                 key={tab.key}
@@ -124,8 +204,21 @@ export default function Alerts() {
               <span className="text-red-400 font-medium">{unackCount}</span> unacknowledged
             </span>
           )}
-          <button onClick={handleAcknowledgeAll} className="btn-secondary text-sm" disabled={unackCount === 0}>
-            <CheckCheck className="w-4 h-4" /> Acknowledge All
+          <button onClick={handleEvaluate} className="btn-secondary text-sm" disabled={actionLoading}>
+            {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Scan className="w-4 h-4" />} Evaluate
+          </button>
+          <button onClick={fetchAlerts} className="btn-secondary text-sm">
+            <RefreshCw className="w-4 h-4" /> Refresh
+          </button>
+          <button onClick={handleAcknowledgeAll} className="btn-secondary text-sm" disabled={unackCount === 0 || actionLoading}>
+            <CheckCheck className="w-4 h-4" /> Ack All
+          </button>
+          <button
+            onClick={handleDeleteAcknowledged}
+            className="btn-secondary text-sm text-red-400 hover:text-red-300"
+            disabled={scopedAlerts.filter((a) => a.acknowledged).length === 0 || actionLoading}
+          >
+            <Trash2 className="w-4 h-4" /> Clean Up
           </button>
         </div>
       </div>
@@ -155,12 +248,12 @@ export default function Alerts() {
                     <span className={clsx('text-xs font-bold uppercase tracking-wider', config.color)}>
                       {alert.severity}
                     </span>
-                    <span className="text-slate-600">•</span>
+                    <span className="text-slate-600">&#183;</span>
                     <div className="flex items-center gap-1 text-xs text-slate-300">
                       <TypeIcon className="w-3 h-3" />
                       {alert.type.replace(/_/g, ' ')}
                     </div>
-                    <span className="text-slate-600">•</span>
+                    <span className="text-slate-600">&#183;</span>
                     <span className="text-xs text-primary-400 font-medium">{alert.device_name}</span>
                     {alert.acknowledged && (
                       <span className="inline-flex items-center gap-0.5 text-[10px] text-emerald-400 bg-emerald-400/10 px-1.5 py-0.5 rounded-full">
@@ -173,14 +266,22 @@ export default function Alerts() {
                     <p className="text-xs text-slate-500">
                       {formatDistanceToNow(new Date(alert.created_at), { addSuffix: true })}
                     </p>
-                    {!alert.acknowledged && (
+                    <div className="flex items-center gap-1">
+                      {!alert.acknowledged && (
+                        <button
+                          onClick={() => handleAcknowledge(alert.id)}
+                          className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-emerald-400 hover:bg-dark-700 px-2 py-1 rounded transition-colors"
+                        >
+                          <Check className="w-3 h-3" /> Acknowledge
+                        </button>
+                      )}
                       <button
-                        onClick={() => handleAcknowledge(alert.id)}
-                        className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-emerald-400 hover:bg-dark-700 px-2 py-1 rounded transition-colors"
+                        onClick={() => handleDelete(alert.id)}
+                        className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-red-400 hover:bg-dark-700 px-2 py-1 rounded transition-colors"
                       >
-                        <Check className="w-3 h-3" /> Acknowledge
+                        <Trash2 className="w-3 h-3" />
                       </button>
-                    )}
+                    </div>
                   </div>
                 </div>
               </div>

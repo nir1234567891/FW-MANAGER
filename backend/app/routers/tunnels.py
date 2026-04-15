@@ -196,19 +196,18 @@ async def get_device_phase1_config(
     api = FortiGateAPI(host=device.ip_address, port=device.port, api_key=device.api_key)
     target_vdom = vdom or (device.vdom_list[0] if device.vdom_list else "root")
 
-    old_vdom = api.vdom
-    api.vdom = target_vdom
     try:
-        raw = await api._get("/api/v2/cmdb/vpn.ipsec/phase1-interface")
+        raw = await api._get("/api/v2/cmdb/vpn.ipsec/phase1-interface", vdom=target_vdom)
         phase1_list = raw.get("results", [])
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to fetch Phase 1 config: {exc}")
-    finally:
-        api.vdom = old_vdom
 
     configs = []
     for p1 in phase1_list:
-        configs.append(IPsecPhase1Config(**p1))
+        try:
+            configs.append(IPsecPhase1Config(**p1))
+        except Exception:
+            configs.append(IPsecPhase1Config(name=p1.get("name", "unknown")))
 
     return {
         "device_id": device_id,
@@ -237,19 +236,18 @@ async def get_device_phase2_config(
     api = FortiGateAPI(host=device.ip_address, port=device.port, api_key=device.api_key)
     target_vdom = vdom or (device.vdom_list[0] if device.vdom_list else "root")
 
-    old_vdom = api.vdom
-    api.vdom = target_vdom
     try:
-        raw = await api._get("/api/v2/cmdb/vpn.ipsec/phase2-interface")
+        raw = await api._get("/api/v2/cmdb/vpn.ipsec/phase2-interface", vdom=target_vdom)
         phase2_list = raw.get("results", [])
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to fetch Phase 2 config: {exc}")
-    finally:
-        api.vdom = old_vdom
 
     configs = []
     for p2 in phase2_list:
-        configs.append(IPsecPhase2Config(**p2))
+        try:
+            configs.append(IPsecPhase2Config(**p2))
+        except Exception:
+            configs.append(IPsecPhase2Config(name=p2.get("name", "unknown")))
 
     return {
         "device_id": device_id,

@@ -1,206 +1,290 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   Shield, Search, ChevronRight, X, CheckCircle2, XCircle, Ban,
-  ToggleLeft, ToggleRight, Plus, AlertTriangle, Eye, Trash2, Copy,
-  TrendingDown, Clock, Layers,
+  ToggleLeft, ToggleRight, Plus, AlertTriangle,
+  TrendingDown, Layers, RefreshCw, Loader2, Download,
+  Send, ChevronDown, Cpu,
 } from 'lucide-react';
 import { clsx } from 'clsx';
-import type { Policy } from '@/types';
 import { useScope } from '@/hooks/useScope';
-import { deviceService, policyService } from '@/services/api';
+import { deviceService, policyService, objectService } from '@/services/api';
 import { mapBackendDevice } from '@/utils/mapDevice';
+import { useToast } from '@/components/Toast';
 
-type LocalPolicy = Policy & {
+interface LocalPolicy {
+  id: number;
   device_id: string;
   vdom: string;
-};
+  name: string;
+  source_interface: string;
+  dest_interface: string;
+  source_address: string;
+  dest_address: string;
+  service: string;
+  action: string;
+  nat: boolean;
+  log: boolean;
+  status: string;
+  hit_count: number;
+  schedule: string;
+  comments: string;
+}
 
-type ObjectKind = 'address' | 'service' | 'group';
-type UserStatus = 'active' | 'disabled';
+type ObjectKind = 'address' | 'service' | 'address-group' | 'service-group';
 
 interface FirewallObject {
-  id: string;
   name: string;
   kind: ObjectKind;
   value: string;
   comment: string;
-  devices: string[];
 }
 
-interface FirewallUser {
+interface DeviceInfo {
   id: string;
-  username: string;
-  auth_type: 'local' | 'ldap' | 'radius';
-  status: UserStatus;
-  groups: string[];
-  devices: string[];
-  last_login: string;
+  name: string;
+  vdoms: string[];
 }
 
-const fallbackDevices = [
-  { id: '1', name: 'FG-HQ-DC1', vdoms: ['root', 'DMZ', 'Guest'] },
-  { id: '2', name: 'FG-HQ-DC2', vdoms: ['root', 'DMZ', 'Guest'] },
-  { id: '3', name: 'FG-BRANCH-NYC', vdoms: ['root'] },
-  { id: '4', name: 'FG-BRANCH-LON', vdoms: ['root'] },
-  { id: '6', name: 'FG-BRANCH-SYD', vdoms: ['root'] },
+const smartTabs: { key: 'policies' | 'objects' | 'audit'; label: string; icon: React.ElementType }[] = [
+  { key: 'policies', label: 'Policies', icon: Shield },
+  { key: 'objects', label: 'Objects', icon: Layers },
+  { key: 'audit', label: 'Policy Audit', icon: AlertTriangle },
 ];
 
-const mockPolicies: LocalPolicy[] = [
-  { id: 1, device_id: '1', vdom: 'root', name: 'allow-internet', source_interface: 'port2 (LAN)', dest_interface: 'port1 (WAN)', source_address: 'LAN_SUBNET', dest_address: 'all', service: 'ALL', action: 'accept', nat: true, log: true, status: 'enabled', hit_count: 1842956, schedule: 'always', comments: 'Allow LAN to Internet with NAT' },
-  { id: 2, device_id: '1', vdom: 'root', name: 'allow-dns', source_interface: 'port2 (LAN)', dest_interface: 'port1 (WAN)', source_address: 'LAN_SUBNET', dest_address: 'DNS_SERVERS', service: 'DNS', action: 'accept', nat: true, log: false, status: 'enabled', hit_count: 5621340, schedule: 'always', comments: 'DNS resolution for LAN' },
-  { id: 3, device_id: '1', vdom: 'root', name: 'vpn-hq-to-nyc', source_interface: 'port2 (LAN)', dest_interface: 'HQ-NYC-VPN', source_address: 'HQ_SUBNET', dest_address: 'NYC_SUBNET', service: 'ALL', action: 'accept', nat: false, log: true, status: 'enabled', hit_count: 892451, schedule: 'always', comments: 'Site-to-site VPN traffic to NYC' },
-  { id: 4, device_id: '1', vdom: 'root', name: 'vpn-hq-to-lon', source_interface: 'port2 (LAN)', dest_interface: 'HQ-LON-VPN', source_address: 'HQ_SUBNET', dest_address: 'LON_SUBNET', service: 'ALL', action: 'accept', nat: false, log: true, status: 'enabled', hit_count: 645832, schedule: 'always', comments: 'Site-to-site VPN traffic to London' },
-  { id: 5, device_id: '1', vdom: 'DMZ', name: 'allow-mgmt', source_interface: 'port2 (LAN)', dest_interface: 'any', source_address: 'MGMT_HOSTS', dest_address: 'FORTIGATE_MGMT', service: 'HTTPS SSH', action: 'accept', nat: false, log: true, status: 'enabled', hit_count: 45230, schedule: 'always', comments: 'Management access from trusted hosts' },
-  { id: 6, device_id: '1', vdom: 'Guest', name: 'deny-guest-internal', source_interface: 'port4 (Guest)', dest_interface: 'port2 (LAN)', source_address: 'GUEST_SUBNET', dest_address: 'LAN_SUBNET', service: 'ALL', action: 'deny', nat: false, log: true, status: 'enabled', hit_count: 128943, schedule: 'always', comments: 'Block guest access to internal LAN' },
-  { id: 7, device_id: '2', vdom: 'Guest', name: 'guest-internet', source_interface: 'port4 (Guest)', dest_interface: 'port1 (WAN)', source_address: 'GUEST_SUBNET', dest_address: 'all', service: 'HTTP HTTPS DNS', action: 'accept', nat: true, log: true, status: 'enabled', hit_count: 342198, schedule: 'always', comments: 'Guest internet access (restricted services)' },
-  { id: 8, device_id: '2', vdom: 'DMZ', name: 'dmz-web-servers', source_interface: 'port1 (WAN)', dest_interface: 'port3 (DMZ)', source_address: 'all', dest_address: 'DMZ_WEB_SERVERS', service: 'HTTP HTTPS', action: 'accept', nat: false, log: true, status: 'enabled', hit_count: 2341567, schedule: 'always', comments: 'Inbound web traffic to DMZ servers' },
-  { id: 9, device_id: '3', vdom: 'root', name: 'legacy-ftp-access', source_interface: 'port1 (WAN)', dest_interface: 'port3 (DMZ)', source_address: 'PARTNER_IPS', dest_address: 'FTP_SERVER', service: 'FTP', action: 'accept', nat: false, log: true, status: 'disabled', hit_count: 1205, schedule: 'always', comments: 'Legacy FTP access (scheduled for removal)' },
-  { id: 10, device_id: '4', vdom: 'root', name: 'block-tor-exit-nodes', source_interface: 'any', dest_interface: 'any', source_address: 'TOR_EXIT_NODES', dest_address: 'all', service: 'ALL', action: 'deny', nat: false, log: true, status: 'enabled', hit_count: 89432, schedule: 'always', comments: 'Block known Tor exit nodes' },
-  { id: 11, device_id: '6', vdom: 'root', name: 'voip-traffic', source_interface: 'port2 (LAN)', dest_interface: 'port1 (WAN)', source_address: 'VOIP_PHONES', dest_address: 'SIP_PROVIDER', service: 'SIP H323', action: 'accept', nat: true, log: false, status: 'enabled', hit_count: 156789, schedule: 'always', comments: 'VoIP traffic to SIP provider' },
-  { id: 12, device_id: '6', vdom: 'root', name: 'deny-all', source_interface: 'any', dest_interface: 'any', source_address: 'all', dest_address: 'all', service: 'ALL', action: 'deny', nat: false, log: true, status: 'enabled', hit_count: 3452910, schedule: 'always', comments: 'Implicit deny all' },
-];
-
-const mockObjects: FirewallObject[] = [
-  { id: 'o1', name: 'HQ_SUBNET', kind: 'address', value: '10.0.0.0/16', comment: 'HQ LAN', devices: ['1', '2'] },
-  { id: 'o2', name: 'NYC_SUBNET', kind: 'address', value: '10.1.0.0/16', comment: 'Branch NYC', devices: ['1', '2', '3'] },
-  { id: 'o3', name: 'LON_SUBNET', kind: 'address', value: '10.2.0.0/16', comment: 'Branch London', devices: ['1', '2', '4'] },
-  { id: 'o4', name: 'SSH_HTTPS', kind: 'service', value: 'TCP/22,443', comment: 'Admin services', devices: ['1', '2', '3', '4', '6'] },
-  { id: 'o5', name: 'WEB_PORTS', kind: 'service', value: 'TCP/80,443', comment: 'Web access', devices: ['1', '2', '3', '4', '6'] },
-  { id: 'o6', name: 'BRANCH_OFFICES', kind: 'group', value: 'NYC_SUBNET, LON_SUBNET', comment: 'All branch networks', devices: ['1', '2'] },
-];
-
-const mockUsers: FirewallUser[] = [
-  { id: 'u1', username: 'netadmin', auth_type: 'local', status: 'active', groups: ['super_admin'], devices: ['1', '2'], last_login: '2026-03-25T09:12:00Z' },
-  { id: 'u2', username: 'soc_analyst_1', auth_type: 'ldap', status: 'active', groups: ['read_only', 'soc_team'], devices: ['1', '2', '3', '4'], last_login: '2026-03-25T08:01:00Z' },
-  { id: 'u3', username: 'branch_it_london', auth_type: 'radius', status: 'active', groups: ['branch_admin'], devices: ['4'], last_login: '2026-03-24T15:42:00Z' },
-  { id: 'u4', username: 'legacy_admin', auth_type: 'local', status: 'disabled', groups: ['super_admin'], devices: ['6'], last_login: '2026-02-10T10:30:00Z' },
-];
-
-const OBJECTS_STORAGE_KEY = 'fortimanager-pro-objects';
-
-function loadObjects(): FirewallObject[] {
-  try {
-    const raw = localStorage.getItem(OBJECTS_STORAGE_KEY);
-    if (!raw) return mockObjects;
-    const parsed = JSON.parse(raw) as FirewallObject[];
-    return Array.isArray(parsed) ? parsed : mockObjects;
-  } catch {
-    return mockObjects;
+function validateSubnet(v: string): string | null {
+  v = v.trim();
+  if (!v) return 'Subnet is required';
+  if (v.includes('/')) {
+    const [ip, prefix] = v.split('/');
+    if (!isValidIp(ip)) return `Invalid IP address: ${ip}`;
+    const p = parseInt(prefix, 10);
+    if (isNaN(p) || p < 0 || p > 32) return `Invalid prefix length: ${prefix}`;
+    return null;
   }
+  const parts = v.split(/\s+/);
+  if (parts.length === 2) {
+    if (!isValidIp(parts[0])) return `Invalid IP: ${parts[0]}`;
+    if (!isValidIp(parts[1])) return `Invalid mask: ${parts[1]}`;
+    return null;
+  }
+  if (isValidIp(v)) return null;
+  return 'Use CIDR (10.0.0.0/24) or IP MASK (10.0.0.0 255.255.255.0)';
+}
+
+function isValidIp(ip: string): boolean {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return false;
+  return parts.every(p => {
+    const n = parseInt(p, 10);
+    return !isNaN(n) && n >= 0 && n <= 255 && String(n) === p;
+  });
+}
+
+function validateFqdn(v: string): string | null {
+  v = v.trim();
+  if (!v) return 'FQDN is required';
+  if (!/^[a-zA-Z0-9*]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$/.test(v)) return 'Invalid FQDN format';
+  return null;
+}
+
+function validatePort(v: string): string | null {
+  v = v.trim();
+  if (!v) return null;
+  for (const part of v.split(/\s+/)) {
+    if (part.includes('-')) {
+      const [lo, hi] = part.split('-');
+      if (!lo || !hi || isNaN(+lo) || isNaN(+hi) || +lo < 1 || +hi > 65535 || +lo > +hi) return `Invalid port range: ${part}`;
+    } else {
+      if (isNaN(+part) || +part < 1 || +part > 65535) return `Invalid port: ${part}`;
+    }
+  }
+  return null;
 }
 
 export default function Policies() {
   const { scope, setDeviceId: setGlobalDeviceId, setVdom: setGlobalVdom } = useScope();
-  const [activeTab, setActiveTab] = useState<'policies' | 'objects' | 'users' | 'audit'>('policies');
-  const [devices, setDevicesState] = useState(fallbackDevices);
-  const [policies, setPolicies] = useState<LocalPolicy[]>(mockPolicies);
-  const [selectedDeviceId, setSelectedDeviceId] = useState(scope.deviceId === 'all' ? '1' : scope.deviceId);
-  const [selectedVdom, setSelectedVdom] = useState(scope.vdom === 'all' ? 'root' : scope.vdom);
+  const { addToast } = useToast();
+  const [activeTab, setActiveTab] = useState<'policies' | 'objects' | 'audit'>('policies');
+  const [devices, setDevicesState] = useState<DeviceInfo[]>([]);
+  const [syncing, setSyncing] = useState(false);
+  const [loadingPolicies, setLoadingPolicies] = useState(false);
+  const [policies, setPolicies] = useState<LocalPolicy[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState(scope.deviceId === 'all' ? '' : scope.deviceId);
+  const [selectedVdom, setSelectedVdom] = useState(scope.vdom === 'all' ? '' : scope.vdom);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedPolicy, setSelectedPolicy] = useState<LocalPolicy | null>(null);
-  const [objectSearch, setObjectSearch] = useState('');
-  const [userSearch, setUserSearch] = useState('');
-  const [selectedObjectId, setSelectedObjectId] = useState('');
-  const [targetDevices, setTargetDevices] = useState<string[]>([]);
-  const [actionMessage, setActionMessage] = useState('');
-  const [objects, setObjects] = useState<FirewallObject[]>(loadObjects);
-  const [newObjectName, setNewObjectName] = useState('');
-  const [newObjectKind, setNewObjectKind] = useState<ObjectKind>('address');
-  const [newObjectValue, setNewObjectValue] = useState('');
-  const [newObjectComment, setNewObjectComment] = useState('');
-  const [newObjectTargets, setNewObjectTargets] = useState<string[]>([]);
 
-  // Load real devices on mount
+  // Objects tab state
+  const [objectSearch, setObjectSearch] = useState('');
+  const [objectFilter, setObjectFilter] = useState<ObjectKind | 'all'>('all');
+  const [objects, setObjects] = useState<FirewallObject[]>([]);
+  const [loadingObjects, setLoadingObjects] = useState(false);
+
+  // Create address form
+  const [newObjType, setNewObjType] = useState<'address' | 'service'>('address');
+  const [addrName, setAddrName] = useState('');
+  const [addrType, setAddrType] = useState<'ipmask' | 'iprange' | 'fqdn'>('ipmask');
+  const [addrSubnet, setAddrSubnet] = useState('');
+  const [addrStartIp, setAddrStartIp] = useState('');
+  const [addrEndIp, setAddrEndIp] = useState('');
+  const [addrFqdn, setAddrFqdn] = useState('');
+  const [addrComment, setAddrComment] = useState('');
+  // Create service form
+  const [svcName, setSvcName] = useState('');
+  const [svcTcp, setSvcTcp] = useState('');
+  const [svcUdp, setSvcUdp] = useState('');
+  const [svcComment, setSvcComment] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  // Multi-FW push state
+  const [pushToMany, setPushToMany] = useState(false);
+  // key = "deviceId::vdom"
+  const [pushTargets, setPushTargets] = useState<Set<string>>(new Set());
+  const [pushResultsOpen, setPushResultsOpen] = useState(false);
+  const [pushResults, setPushResults] = useState<{ device_name: string; vdom: string; success: boolean; error?: string }[]>([]);
+  const [pushSummary, setPushSummary] = useState('');
+
+  // Load real devices
   useEffect(() => {
     deviceService.getAll()
       .then((res) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const list = res.data as any[];
         if (Array.isArray(list) && list.length > 0) {
-          const mapped = list.map((d: any) => {
+          const mapped: DeviceInfo[] = list.map((d: any) => {
             const dev = mapBackendDevice(d);
             return {
               id: dev.id,
               name: dev.name,
-              vdoms: Array.isArray(d.vdom_list) && d.vdom_list.length > 0
-                ? d.vdom_list as string[]
-                : ['root'],
+              vdoms: Array.isArray(d.vdom_list) && d.vdom_list.length > 0 ? d.vdom_list as string[] : ['root'],
             };
           });
           setDevicesState(mapped);
+          if (!selectedDeviceId && mapped.length > 0) {
+            setSelectedDeviceId(mapped[0].id);
+            setSelectedVdom(mapped[0].vdoms[0] || 'root');
+          }
         }
       })
-      .catch(() => { /* keep fallback */ });
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Load real policies when device/vdom changes
-  useEffect(() => {
-    if (selectedDeviceId === 'all') {
-      setPolicies(mockPolicies);
-      return;
+  // Load policies when device/vdom changes
+  const loadPolicies = useCallback(async () => {
+    if (!selectedDeviceId) return;
+    setLoadingPolicies(true);
+    try {
+      const vdom = selectedVdom || undefined;
+      const res = await policyService.getByDevice(selectedDeviceId, vdom);
+      const data = res.data as any;
+      const raw = data?.policies ?? data;
+      if (Array.isArray(raw)) {
+        const mapped: LocalPolicy[] = raw.map((p: any) => ({
+          id: p.policyid ?? p.policy_id ?? p.id ?? 0,
+          device_id: String(data?.device_id ?? selectedDeviceId),
+          vdom: data?.vdom_name || selectedVdom || 'root',
+          name: p.name || '',
+          source_interface: p.srcintf || '',
+          dest_interface: p.dstintf || '',
+          source_address: p.srcaddr || '',
+          dest_address: p.dstaddr || '',
+          service: p.service || 'ALL',
+          action: p.action || 'accept',
+          nat: p.nat === 'enable' || p.nat === true,
+          log: p.logtraffic !== 'disable',
+          status: p.status === 'enable' || p.status === 'enabled' ? 'enabled' : 'disabled',
+          hit_count: p.hit_count || 0,
+          schedule: p.schedule || 'always',
+          comments: p.comments || '',
+        }));
+        setPolicies(mapped);
+      } else {
+        setPolicies([]);
+      }
+    } catch {
+      setPolicies([]);
+    } finally {
+      setLoadingPolicies(false);
     }
-    policyService.getByDevice(selectedDeviceId, selectedVdom === 'all' ? undefined : selectedVdom)
-      .then((res) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const data = res.data as any;
-        const raw = data?.policies ?? data;
-        if (Array.isArray(raw) && raw.length > 0) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const mapped: LocalPolicy[] = raw.map((p: any) => ({
-            id: p.policy_id ?? p.id ?? 0,
-            device_id: String(data?.device_id ?? selectedDeviceId),
-            vdom: p.vdom_name || p.vdom || 'root',
-            name: p.name || '',
-            source_interface: p.srcintf || p.source_interface || '',
-            dest_interface: p.dstintf || p.dest_interface || '',
-            source_address: p.srcaddr || p.source_address || '',
-            dest_address: p.dstaddr || p.dest_address || '',
-            service: p.service || 'ALL',
-            action: p.action || 'accept',
-            nat: p.nat === 'enable' || p.nat === true,
-            log: p.logtraffic !== 'disable' && p.log !== false,
-            status: p.status === 'enable' || p.status === 'enabled' ? 'enabled' : 'disabled',
-            hit_count: p.hit_count || 0,
-            schedule: p.schedule || 'always',
-            comments: p.comments || '',
-          }));
-          setPolicies(mapped);
-        } else {
-          setPolicies(mockPolicies.filter((p) => p.device_id === selectedDeviceId));
-        }
-      })
-      .catch(() => {
-        setPolicies(mockPolicies.filter((p) => p.device_id === selectedDeviceId));
-      });
   }, [selectedDeviceId, selectedVdom]);
+
+  useEffect(() => { loadPolicies(); }, [loadPolicies]);
+
+  // Load objects when device/vdom changes (for objects tab)
+  const loadObjects = useCallback(async () => {
+    if (!selectedDeviceId) return;
+    setLoadingObjects(true);
+    try {
+      const vdom = selectedVdom || undefined;
+      const [addrRes, svcRes, addrGrpRes, svcGrpRes] = await Promise.allSettled([
+        objectService.getAddresses(selectedDeviceId, vdom),
+        objectService.getServices(selectedDeviceId, vdom),
+        objectService.getAddressGroups(selectedDeviceId, vdom),
+        objectService.getServiceGroups(selectedDeviceId, vdom),
+      ]);
+
+      const items: FirewallObject[] = [];
+
+      if (addrRes.status === 'fulfilled') {
+        const addrs = (addrRes.value.data as any)?.addresses || [];
+        for (const a of addrs) {
+          let value = '';
+          if (a.type === 'ipmask') value = a.subnet || '';
+          else if (a.type === 'iprange') value = `${a.start_ip} - ${a.end_ip}`;
+          else if (a.type === 'fqdn') value = a.fqdn || '';
+          else value = a.type || '';
+          items.push({ name: a.name, kind: 'address', value, comment: a.comment || '' });
+        }
+      }
+      if (svcRes.status === 'fulfilled') {
+        const svcs = (svcRes.value.data as any)?.services || [];
+        for (const s of svcs) {
+          const ports = [s.tcp_portrange && `TCP/${s.tcp_portrange}`, s.udp_portrange && `UDP/${s.udp_portrange}`].filter(Boolean).join(', ');
+          items.push({ name: s.name, kind: 'service', value: ports || s.protocol || '', comment: s.comment || '' });
+        }
+      }
+      if (addrGrpRes.status === 'fulfilled') {
+        const grps = (addrGrpRes.value.data as any)?.groups || [];
+        for (const g of grps) {
+          items.push({ name: g.name, kind: 'address-group', value: (g.member || []).join(', '), comment: g.comment || '' });
+        }
+      }
+      if (svcGrpRes.status === 'fulfilled') {
+        const grps = (svcGrpRes.value.data as any)?.groups || [];
+        for (const g of grps) {
+          items.push({ name: g.name, kind: 'service-group', value: (g.member || []).join(', '), comment: g.comment || '' });
+        }
+      }
+
+      setObjects(items);
+    } catch {
+      setObjects([]);
+    } finally {
+      setLoadingObjects(false);
+    }
+  }, [selectedDeviceId, selectedVdom]);
+
+  useEffect(() => {
+    if (activeTab === 'objects') loadObjects();
+  }, [activeTab, loadObjects]);
 
   useEffect(() => {
     if (scope.deviceId !== 'all') setSelectedDeviceId(scope.deviceId);
     if (scope.vdom !== 'all') setSelectedVdom(scope.vdom);
   }, [scope.deviceId, scope.vdom]);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(OBJECTS_STORAGE_KEY, JSON.stringify(objects));
-    } catch {
-      // ignore localStorage errors
-    }
-  }, [objects]);
-
   const currentDevice = devices.find((d) => d.id === selectedDeviceId);
 
   const filtered = useMemo(() => {
+    const q = searchQuery.toLowerCase();
     return policies.filter((p) => {
-      const q = searchQuery.toLowerCase();
-      const deviceMatch = selectedDeviceId === 'all' || p.device_id === selectedDeviceId;
-      const vdomMatch = selectedVdom === 'all' || p.vdom === selectedVdom;
-      const textMatch = p.name.toLowerCase().includes(q) ||
+      return p.name.toLowerCase().includes(q) ||
         p.source_address.toLowerCase().includes(q) ||
         p.dest_address.toLowerCase().includes(q) ||
         p.service.toLowerCase().includes(q);
-      return deviceMatch && vdomMatch && textMatch;
     });
-  }, [policies, searchQuery, selectedDeviceId, selectedVdom]);
+  }, [policies, searchQuery]);
 
   const totalAccept = filtered.filter((p) => p.action === 'accept').length;
   const totalDeny = filtered.filter((p) => p.action === 'deny').length;
@@ -209,99 +293,273 @@ export default function Policies() {
   const visibleObjects = useMemo(() => {
     const q = objectSearch.toLowerCase();
     return objects.filter((o) => {
-      const text = o.name.toLowerCase().includes(q) ||
-        o.kind.toLowerCase().includes(q) ||
-        o.value.toLowerCase().includes(q);
-      const scopeMatch = selectedDeviceId === 'all' || o.devices.includes(selectedDeviceId);
-      return text && scopeMatch;
+      const textMatch = o.name.toLowerCase().includes(q) || o.kind.toLowerCase().includes(q) || o.value.toLowerCase().includes(q);
+      const kindMatch = objectFilter === 'all' || o.kind === objectFilter;
+      return textMatch && kindMatch;
     });
-  }, [objectSearch, objects, selectedDeviceId]);
+  }, [objectSearch, objects, objectFilter]);
 
-  const visibleUsers = useMemo(() => {
-    const q = userSearch.toLowerCase();
-    return mockUsers.filter((u) => {
-      const text = u.username.toLowerCase().includes(q) ||
-        u.auth_type.toLowerCase().includes(q) ||
-        u.groups.join(',').toLowerCase().includes(q);
-      const scopeMatch = selectedDeviceId === 'all' || u.devices.includes(selectedDeviceId);
-      return text && scopeMatch;
-    });
-  }, [userSearch, selectedDeviceId]);
-
-  const handleApplyObject = (mode: 'all' | 'selected') => {
-    const obj = objects.find((o) => o.id === selectedObjectId);
-    if (!obj) {
-      setActionMessage('בחר אובייקט להפצה');
+  const handleSync = async () => {
+    if (!selectedDeviceId) {
+      addToast('warning', 'Select a device to sync');
       return;
     }
-    const targetIds = mode === 'all' ? devices.map((d) => d.id) : targetDevices;
-    const deviceNames = devices.filter((d) => targetIds.includes(d.id)).map((d) => d.name);
-    if (deviceNames.length === 0) {
-      setActionMessage('לא נבחרו פיירוולים להפצה');
-      return;
+    setSyncing(true);
+    try {
+      const vdom = selectedVdom || undefined;
+      const res = await policyService.sync(selectedDeviceId, vdom);
+      const data = res.data as any;
+      addToast('success', data?.message || 'Policies synced successfully');
+      await loadPolicies();
+    } catch {
+      addToast('error', 'Failed to sync policies from FortiGate');
+    } finally {
+      setSyncing(false);
     }
-    setObjects((prev) => prev.map((o) => (
-      o.id !== obj.id
-        ? o
-        : { ...o, devices: Array.from(new Set([...o.devices, ...targetIds])) }
-    )));
-    setActionMessage(`בוצע Apply לאובייקט "${obj.name}" עבור: ${deviceNames.join(', ')}`);
   };
 
-  const handleCreateObject = () => {
-    if (!newObjectName.trim() || !newObjectValue.trim()) {
-      setActionMessage('יש למלא שם וערך לאובייקט החדש');
+  const handleSyncAllVdoms = async () => {
+    if (!selectedDeviceId) {
+      addToast('warning', 'Select a device');
       return;
     }
-    const targets = newObjectTargets.length ? newObjectTargets : (selectedDeviceId === 'all' ? [] : [selectedDeviceId]);
-    if (targets.length === 0) {
-      setActionMessage('בחר לפחות פיירוול אחד ליצירת האובייקט');
+    setSyncing(true);
+    try {
+      const res = await policyService.syncAllVdoms(selectedDeviceId);
+      const data = res.data as any;
+      addToast('success', data?.message || 'All VDOMs synced');
+      await loadPolicies();
+    } catch {
+      addToast('error', 'Failed to sync all VDOMs');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleCreateObject = async () => {
+    if (!selectedDeviceId) {
+      addToast('warning', 'Select a device first');
       return;
     }
-    const item: FirewallObject = {
-      id: `o${Date.now()}`,
-      name: newObjectName.trim(),
-      kind: newObjectKind,
-      value: newObjectValue.trim(),
-      comment: newObjectComment.trim(),
-      devices: targets,
-    };
-    setObjects((prev) => [item, ...prev]);
-    setSelectedObjectId(item.id);
-    setNewObjectName('');
-    setNewObjectValue('');
-    setNewObjectComment('');
-    setNewObjectTargets([]);
-    setActionMessage(`האובייקט "${item.name}" נוצר בהצלחה`);
+    setFormErrors({});
+    const errors: Record<string, string> = {};
+
+    if (newObjType === 'address') {
+      if (!addrName.trim()) errors.addrName = 'Name is required';
+      else if (!/^[A-Za-z0-9_. -]+$/.test(addrName)) errors.addrName = 'Only letters, numbers, dots, hyphens, underscores, spaces';
+
+      if (addrType === 'ipmask') {
+        const err = validateSubnet(addrSubnet);
+        if (err) errors.addrSubnet = err;
+      } else if (addrType === 'iprange') {
+        if (!isValidIp(addrStartIp.trim())) errors.addrStartIp = 'Invalid IP';
+        if (!isValidIp(addrEndIp.trim())) errors.addrEndIp = 'Invalid IP';
+      } else if (addrType === 'fqdn') {
+        const err = validateFqdn(addrFqdn);
+        if (err) errors.addrFqdn = err;
+      }
+
+      if (Object.keys(errors).length > 0) {
+        setFormErrors(errors);
+        return;
+      }
+
+      setCreating(true);
+      try {
+        const payload: Record<string, unknown> = {
+          name: addrName.trim(),
+          type: addrType,
+          comment: addrComment.trim(),
+        };
+        if (addrType === 'ipmask') payload.subnet = addrSubnet.trim();
+        else if (addrType === 'iprange') { payload['start-ip'] = addrStartIp.trim(); payload['end-ip'] = addrEndIp.trim(); }
+        else if (addrType === 'fqdn') payload.fqdn = addrFqdn.trim();
+
+        const vdom = selectedVdom || undefined;
+        const res = await objectService.createAddress(selectedDeviceId, payload, vdom);
+        const data = res.data as any;
+        addToast('success', data?.message || 'Address created');
+        setAddrName(''); setAddrSubnet(''); setAddrStartIp(''); setAddrEndIp(''); setAddrFqdn(''); setAddrComment('');
+        await loadObjects();
+      } catch (err: any) {
+        const detail = err?.response?.data?.detail || 'Failed to create address';
+        addToast('error', typeof detail === 'string' ? detail : JSON.stringify(detail));
+      } finally {
+        setCreating(false);
+      }
+    } else {
+      if (!svcName.trim()) errors.svcName = 'Name is required';
+      else if (!/^[A-Za-z0-9_. -]+$/.test(svcName)) errors.svcName = 'Only letters, numbers, dots, hyphens, underscores, spaces';
+      const tcpErr = validatePort(svcTcp);
+      if (tcpErr) errors.svcTcp = tcpErr;
+      const udpErr = validatePort(svcUdp);
+      if (udpErr) errors.svcUdp = udpErr;
+      if (!svcTcp.trim() && !svcUdp.trim()) errors.svcTcp = 'At least one port range is required';
+
+      if (Object.keys(errors).length > 0) {
+        setFormErrors(errors);
+        return;
+      }
+
+      setCreating(true);
+      try {
+        const payload: Record<string, unknown> = {
+          name: svcName.trim(),
+          comment: svcComment.trim(),
+        };
+        if (svcTcp.trim()) payload['tcp-portrange'] = svcTcp.trim();
+        if (svcUdp.trim()) payload['udp-portrange'] = svcUdp.trim();
+
+        const vdom = selectedVdom || undefined;
+        const res = await objectService.createService(selectedDeviceId, payload, vdom);
+        const data = res.data as any;
+        addToast('success', data?.message || 'Service created');
+        setSvcName(''); setSvcTcp(''); setSvcUdp(''); setSvcComment('');
+        await loadObjects();
+      } catch (err: any) {
+        const detail = err?.response?.data?.detail || 'Failed to create service';
+        addToast('error', typeof detail === 'string' ? detail : JSON.stringify(detail));
+      } finally {
+        setCreating(false);
+      }
+    }
+  };
+
+  // Toggle a device/vdom combination in the multi-push target set
+  const togglePushTarget = (deviceId: string, vdom: string) => {
+    const key = `${deviceId}::${vdom}`;
+    setPushTargets((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const handlePushToMany = async () => {
+    if (pushTargets.size === 0) {
+      addToast('warning', 'Select at least one target firewall');
+      return;
+    }
+    setFormErrors({});
+    const errors: Record<string, string> = {};
+
+    // Build targets list
+    const targets = Array.from(pushTargets).map((key) => {
+      const [dId, vdom] = key.split('::');
+      return { device_id: parseInt(dId, 10), vdom };
+    });
+
+    if (newObjType === 'address') {
+      if (!addrName.trim()) errors.addrName = 'Name is required';
+      else if (!/^[A-Za-z0-9_. -]+$/.test(addrName)) errors.addrName = 'Only letters, numbers, dots, hyphens, underscores, spaces';
+      if (addrType === 'ipmask') { const e = validateSubnet(addrSubnet); if (e) errors.addrSubnet = e; }
+      else if (addrType === 'iprange') {
+        if (!isValidIp(addrStartIp.trim())) errors.addrStartIp = 'Invalid IP';
+        if (!isValidIp(addrEndIp.trim())) errors.addrEndIp = 'Invalid IP';
+      } else if (addrType === 'fqdn') { const e = validateFqdn(addrFqdn); if (e) errors.addrFqdn = e; }
+      if (Object.keys(errors).length > 0) { setFormErrors(errors); return; }
+
+      setCreating(true);
+      try {
+        const payload: Record<string, unknown> = { name: addrName.trim(), type: addrType, comment: addrComment.trim() };
+        if (addrType === 'ipmask') payload.subnet = addrSubnet.trim();
+        else if (addrType === 'iprange') { payload['start-ip'] = addrStartIp.trim(); payload['end-ip'] = addrEndIp.trim(); }
+        else if (addrType === 'fqdn') payload.fqdn = addrFqdn.trim();
+
+        const res = await objectService.pushAddressToMany(payload, targets);
+        const data = res.data as any;
+        setPushResults(data.results || []);
+        setPushSummary(data.message || '');
+        setPushResultsOpen(true);
+        addToast('success', data.message || 'Push complete');
+        setAddrName(''); setAddrSubnet(''); setAddrStartIp(''); setAddrEndIp(''); setAddrFqdn(''); setAddrComment('');
+      } catch (err: any) {
+        const detail = err?.response?.data?.detail || 'Push failed';
+        addToast('error', typeof detail === 'string' ? detail : JSON.stringify(detail));
+      } finally {
+        setCreating(false);
+      }
+    } else {
+      if (!svcName.trim()) errors.svcName = 'Name is required';
+      else if (!/^[A-Za-z0-9_. -]+$/.test(svcName)) errors.svcName = 'Only letters, numbers, dots, hyphens, underscores, spaces';
+      const tcpErr = validatePort(svcTcp); if (tcpErr) errors.svcTcp = tcpErr;
+      const udpErr = validatePort(svcUdp); if (udpErr) errors.svcUdp = udpErr;
+      if (!svcTcp.trim() && !svcUdp.trim()) errors.svcTcp = 'At least one port range is required';
+      if (Object.keys(errors).length > 0) { setFormErrors(errors); return; }
+
+      setCreating(true);
+      try {
+        const payload: Record<string, unknown> = { name: svcName.trim(), comment: svcComment.trim() };
+        if (svcTcp.trim()) payload['tcp-portrange'] = svcTcp.trim();
+        if (svcUdp.trim()) payload['udp-portrange'] = svcUdp.trim();
+
+        const res = await objectService.pushServiceToMany(payload, targets);
+        const data = res.data as any;
+        setPushResults(data.results || []);
+        setPushSummary(data.message || '');
+        setPushResultsOpen(true);
+        addToast('success', data.message || 'Push complete');
+        setSvcName(''); setSvcTcp(''); setSvcUdp(''); setSvcComment('');
+      } catch (err: any) {
+        const detail = err?.response?.data?.detail || 'Push failed';
+        addToast('error', typeof detail === 'string' ? detail : JSON.stringify(detail));
+      } finally {
+        setCreating(false);
+      }
+    }
+  };
+
+  const kindColors: Record<string, string> = {
+    address: 'text-blue-400 bg-blue-400/10 border-blue-400/30',
+    service: 'text-amber-400 bg-amber-400/10 border-amber-400/30',
+    'address-group': 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30',
+    'service-group': 'text-purple-400 bg-purple-400/10 border-purple-400/30',
   };
 
   return (
     <div className="space-y-4 animate-fade-in">
-      <div className="flex items-center gap-2">
-        <button
-          onClick={() => setActiveTab('policies')}
-          className={clsx('btn-secondary text-sm', activeTab === 'policies' && 'bg-primary-500/20 text-primary-300 border-primary-500/30')}
-        >
-          Policies
-        </button>
-        <button
-          onClick={() => setActiveTab('objects')}
-          className={clsx('btn-secondary text-sm', activeTab === 'objects' && 'bg-primary-500/20 text-primary-300 border-primary-500/30')}
-        >
-          Objects / Services / Groups
-        </button>
-        <button
-          onClick={() => setActiveTab('users')}
-          className={clsx('btn-secondary text-sm', activeTab === 'users' && 'bg-primary-500/20 text-primary-300 border-primary-500/30')}
-        >
-          Users
-        </button>
-        <button
-          onClick={() => setActiveTab('audit')}
-          className={clsx('btn-secondary text-sm', activeTab === 'audit' && 'bg-primary-500/20 text-primary-300 border-primary-500/30')}
-        >
-          <Eye className="w-3.5 h-3.5" /> Policy Audit
-        </button>
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-1 bg-dark-800/50 rounded-lg border border-dark-700 p-1">
+          {smartTabs.map((tab) => {
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                className={clsx(
+                  'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all',
+                  activeTab === tab.key
+                    ? 'bg-primary-500/15 text-primary-400 shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-dark-700/50'
+                )}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex items-center gap-2">
+          {activeTab === 'policies' && (
+            <>
+              <button onClick={handleSync} disabled={syncing || !selectedDeviceId} className="btn-secondary text-sm">
+                {syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                Sync VDOM
+              </button>
+              <button onClick={handleSyncAllVdoms} disabled={syncing || !selectedDeviceId} className="btn-secondary text-sm">
+                {syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                Sync All VDOMs
+              </button>
+            </>
+          )}
+          {activeTab === 'objects' && (
+            <button onClick={loadObjects} disabled={loadingObjects || !selectedDeviceId} className="btn-secondary text-sm">
+              {loadingObjects ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              Refresh
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
@@ -309,14 +567,17 @@ export default function Policies() {
           <select
             value={selectedDeviceId}
             onChange={(e) => {
-              setSelectedDeviceId(e.target.value);
-              setGlobalDeviceId(e.target.value);
-              setSelectedVdom('all');
-              setGlobalVdom('all');
+              const id = e.target.value;
+              setSelectedDeviceId(id);
+              setGlobalDeviceId(id);
+              const dev = devices.find((d) => d.id === id);
+              const firstVdom = dev?.vdoms[0] || 'root';
+              setSelectedVdom(firstVdom);
+              setGlobalVdom(firstVdom);
             }}
             className="input-dark w-auto text-sm"
           >
-            <option value="all">All Firewalls</option>
+            {devices.length === 0 && <option value="">Loading...</option>}
             {devices.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
           <select
@@ -327,294 +588,396 @@ export default function Policies() {
             }}
             className="input-dark w-auto text-sm"
           >
-            <option value="all">All VDOMs</option>
             {currentDevice?.vdoms.map((v) => <option key={v} value={v}>{v}</option>)}
           </select>
           <div className="relative max-w-xs">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
             <input
-              value={activeTab === 'policies' ? searchQuery : activeTab === 'objects' ? objectSearch : userSearch}
+              value={activeTab === 'policies' ? searchQuery : objectSearch}
               onChange={(e) => {
                 if (activeTab === 'policies') setSearchQuery(e.target.value);
-                if (activeTab === 'objects') setObjectSearch(e.target.value);
-                if (activeTab === 'users') setUserSearch(e.target.value);
+                else setObjectSearch(e.target.value);
               }}
-              placeholder={activeTab === 'policies' ? 'Search policies...' : activeTab === 'objects' ? 'Search objects/services/groups...' : 'Search users...'}
+              placeholder={activeTab === 'policies' ? 'Search policies...' : 'Search objects...'}
               className="input-dark pl-9"
             />
           </div>
+          {activeTab === 'objects' && (
+            <select value={objectFilter} onChange={(e) => setObjectFilter(e.target.value as ObjectKind | 'all')} className="input-dark w-auto text-sm">
+              <option value="all">All Types</option>
+              <option value="address">Addresses</option>
+              <option value="service">Services</option>
+              <option value="address-group">Address Groups</option>
+              <option value="service-group">Service Groups</option>
+            </select>
+          )}
         </div>
       </div>
 
+      {/* POLICIES TAB */}
       {activeTab === 'policies' && (
         <>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="glass-card p-4 flex items-center gap-3">
-          <div className="p-2 bg-primary-400/10 rounded-lg"><Shield className="w-4 h-4 text-primary-400" /></div>
-          <div>
-            <p className="text-xl font-bold text-slate-100">{filtered.length}</p>
-            <p className="text-xs text-slate-400">Total Policies</p>
-          </div>
-        </div>
-        <div className="glass-card p-4 flex items-center gap-3">
-          <div className="p-2 bg-emerald-400/10 rounded-lg"><CheckCircle2 className="w-4 h-4 text-emerald-400" /></div>
-          <div>
-            <p className="text-xl font-bold text-emerald-400">{totalAccept}</p>
-            <p className="text-xs text-slate-400">Accept</p>
-          </div>
-        </div>
-        <div className="glass-card p-4 flex items-center gap-3">
-          <div className="p-2 bg-red-400/10 rounded-lg"><Ban className="w-4 h-4 text-red-400" /></div>
-          <div>
-            <p className="text-xl font-bold text-red-400">{totalDeny}</p>
-            <p className="text-xs text-slate-400">Deny</p>
-          </div>
-        </div>
-        <div className="glass-card p-4 flex items-center gap-3">
-          <div className="p-2 bg-slate-400/10 rounded-lg"><ToggleLeft className="w-4 h-4 text-slate-400" /></div>
-          <div>
-            <p className="text-xl font-bold text-slate-400">{totalDisabled}</p>
-            <p className="text-xs text-slate-400">Disabled</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="glass-card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-dark-700 text-left">
-                <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider w-12">ID</th>
-                <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Name</th>
-                <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Src Intf</th>
-                <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Dst Intf</th>
-                <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Source</th>
-                <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Destination</th>
-                <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Service</th>
-                <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Action</th>
-                <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider w-12">NAT</th>
-                <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider w-12">Log</th>
-                <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Status</th>
-                <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider text-right">Hit Count</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((policy) => (
-                <tr
-                  key={policy.id}
-                  className={clsx(
-                    'border-b border-dark-700/50 table-row-hover',
-                    policy.status === 'disabled' && 'opacity-50'
-                  )}
-                  onClick={() => setSelectedPolicy(policy)}
-                >
-                  <td className="px-3 py-2.5 text-slate-500 font-mono text-xs">{policy.id}</td>
-                  <td className="px-3 py-2.5">
-                    <span className="font-medium text-slate-200">{policy.name}</span>
-                  </td>
-                  <td className="px-3 py-2.5 text-xs text-slate-300 font-mono">{policy.source_interface}</td>
-                  <td className="px-3 py-2.5 text-xs text-slate-300 font-mono">{policy.dest_interface}</td>
-                  <td className="px-3 py-2.5 text-xs text-slate-300">{policy.source_address}</td>
-                  <td className="px-3 py-2.5 text-xs text-slate-300">{policy.dest_address}</td>
-                  <td className="px-3 py-2.5">
-                    <span className="text-xs px-1.5 py-0.5 bg-dark-700 rounded text-slate-300">{policy.service}</span>
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <span className={clsx(
-                      'inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border',
-                      policy.action === 'accept' ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30' :
-                      policy.action === 'deny' ? 'text-red-400 bg-red-400/10 border-red-400/30' :
-                      'text-amber-400 bg-amber-400/10 border-amber-400/30'
-                    )}>
-                      {policy.action === 'accept' && <CheckCircle2 className="w-3 h-3" />}
-                      {policy.action === 'deny' && <XCircle className="w-3 h-3" />}
-                      {policy.action}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2.5 text-center">
-                    {policy.nat ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 mx-auto" /> : <span className="text-slate-600">—</span>}
-                  </td>
-                  <td className="px-3 py-2.5 text-center">
-                    {policy.log ? <CheckCircle2 className="w-3.5 h-3.5 text-primary-400 mx-auto" /> : <span className="text-slate-600">—</span>}
-                  </td>
-                  <td className="px-3 py-2.5">
-                    {policy.status === 'enabled' ? (
-                      <ToggleRight className="w-5 h-5 text-emerald-400" />
-                    ) : (
-                      <ToggleLeft className="w-5 h-5 text-slate-500" />
-                    )}
-                  </td>
-                  <td className="px-3 py-2.5 text-right text-xs font-mono text-slate-300">
-                    {policy.hit_count.toLocaleString()}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {filtered.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-16 text-slate-500">
-            <Shield className="w-12 h-12 mb-3 text-slate-600" />
-            <p className="text-lg font-medium">No policies found</p>
-            <p className="text-sm mt-1">Try adjusting your search query</p>
-          </div>
-        )}
-      </div>
-      </>
-      )}
-
-      {activeTab === 'objects' && (
-        <div className="space-y-4">
-          <div className="glass-card p-4 space-y-3">
-            <h3 className="text-sm font-semibold text-slate-200">יצירת אובייקט חדש</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <input value={newObjectName} onChange={(e) => setNewObjectName(e.target.value)} className="input-dark text-sm" placeholder="Object name (e.g. HR_SUBNET)" />
-              <select value={newObjectKind} onChange={(e) => setNewObjectKind(e.target.value as ObjectKind)} className="input-dark text-sm">
-                <option value="address">Address</option>
-                <option value="service">Service</option>
-                <option value="group">Group</option>
-              </select>
-              <input value={newObjectValue} onChange={(e) => setNewObjectValue(e.target.value)} className="input-dark text-sm md:col-span-2" placeholder="Value (CIDR / ports / members)" />
-              <input value={newObjectComment} onChange={(e) => setNewObjectComment(e.target.value)} className="input-dark text-sm md:col-span-2" placeholder="Comment (optional)" />
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {devices.map((d) => (
-                <button
-                  key={`new-${d.id}`}
-                  onClick={() => setNewObjectTargets((prev) => prev.includes(d.id) ? prev.filter((x) => x !== d.id) : [...prev, d.id])}
-                  className={clsx('px-2.5 py-1 text-xs rounded border transition-colors',
-                    newObjectTargets.includes(d.id)
-                      ? 'bg-primary-500/20 text-primary-300 border-primary-500/30'
-                      : 'bg-dark-900 text-slate-300 border-dark-600 hover:border-primary-500/30')}
-                >
-                  {d.name}
-                </button>
-              ))}
-            </div>
-            <button onClick={handleCreateObject} className="btn-primary text-sm">
-              <Plus className="w-4 h-4" /> Create Object
-            </button>
-          </div>
-
-          <div className="glass-card p-4 space-y-3">
-            <h3 className="text-sm font-semibold text-slate-200">הפצה מהירה של אובייקט/סרביס/גרופ</h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <select value={selectedObjectId} onChange={(e) => setSelectedObjectId(e.target.value)} className="input-dark text-sm">
-                <option value="">בחר אובייקט...</option>
-                {objects.map((o) => (
-                  <option key={o.id} value={o.id}>{o.name} ({o.kind})</option>
-                ))}
-              </select>
-              <div className="md:col-span-2 flex flex-wrap gap-2">
-                {devices.map((d) => (
-                  <button
-                    key={d.id}
-                    onClick={() => setTargetDevices((prev) => prev.includes(d.id) ? prev.filter((x) => x !== d.id) : [...prev, d.id])}
-                    className={clsx('px-2.5 py-1 text-xs rounded border transition-colors',
-                      targetDevices.includes(d.id)
-                        ? 'bg-primary-500/20 text-primary-300 border-primary-500/30'
-                        : 'bg-dark-900 text-slate-300 border-dark-600 hover:border-primary-500/30')}
-                  >
-                    {d.name}
-                  </button>
-                ))}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="glass-card p-4 flex items-center gap-3">
+              <div className="p-2 bg-primary-400/10 rounded-lg"><Shield className="w-4 h-4 text-primary-400" /></div>
+              <div>
+                <p className="text-xl font-bold text-slate-100">{filtered.length}</p>
+                <p className="text-xs text-slate-400">Total Policies</p>
               </div>
             </div>
-            <div className="flex gap-2">
-              <button onClick={() => handleApplyObject('all')} className="btn-primary text-sm">Apply To All</button>
-              <button onClick={() => handleApplyObject('selected')} className="btn-secondary text-sm">Apply To Selected</button>
+            <div className="glass-card p-4 flex items-center gap-3">
+              <div className="p-2 bg-emerald-400/10 rounded-lg"><CheckCircle2 className="w-4 h-4 text-emerald-400" /></div>
+              <div>
+                <p className="text-xl font-bold text-emerald-400">{totalAccept}</p>
+                <p className="text-xs text-slate-400">Accept</p>
+              </div>
             </div>
-            {actionMessage && <p className="text-xs text-emerald-400">{actionMessage}</p>}
+            <div className="glass-card p-4 flex items-center gap-3">
+              <div className="p-2 bg-red-400/10 rounded-lg"><Ban className="w-4 h-4 text-red-400" /></div>
+              <div>
+                <p className="text-xl font-bold text-red-400">{totalDeny}</p>
+                <p className="text-xs text-slate-400">Deny</p>
+              </div>
+            </div>
+            <div className="glass-card p-4 flex items-center gap-3">
+              <div className="p-2 bg-slate-400/10 rounded-lg"><ToggleLeft className="w-4 h-4 text-slate-400" /></div>
+              <div>
+                <p className="text-xl font-bold text-slate-400">{totalDisabled}</p>
+                <p className="text-xs text-slate-400">Disabled</p>
+              </div>
+            </div>
           </div>
 
           <div className="glass-card overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-dark-700 text-left">
-                    <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Name</th>
-                    <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Type</th>
-                    <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Value</th>
-                    <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Exists On Firewalls</th>
-                    <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Comment</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleObjects.map((o) => (
-                    <tr key={o.id} className="border-b border-dark-700/50 table-row-hover">
-                      <td className="px-3 py-2.5 text-slate-200 font-medium">{o.name}</td>
-                      <td className="px-3 py-2.5 text-slate-300">{o.kind}</td>
-                      <td className="px-3 py-2.5 text-slate-300 font-mono text-xs">{o.value}</td>
-                      <td className="px-3 py-2.5">
-                        <div className="flex flex-wrap gap-1">
-                          {o.devices.map((id) => {
-                            const d = devices.find((x) => x.id === id);
-                            return <span key={`${o.id}-${id}`} className="px-2 py-0.5 text-[11px] rounded bg-dark-900 text-slate-300 border border-dark-600">{d?.name || id}</span>;
-                          })}
-                        </div>
-                      </td>
-                      <td className="px-3 py-2.5 text-slate-400 text-xs">{o.comment}</td>
+            {loadingPolicies ? (
+              <div className="flex items-center justify-center py-16 gap-3 text-slate-400">
+                <Loader2 className="w-6 h-6 animate-spin" />
+                <span>Loading policies...</span>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-dark-700 text-left">
+                      <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider w-12">ID</th>
+                      <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Name</th>
+                      <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Src Intf</th>
+                      <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Dst Intf</th>
+                      <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Source</th>
+                      <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Destination</th>
+                      <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Service</th>
+                      <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Action</th>
+                      <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider w-12">NAT</th>
+                      <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider w-12">Log</th>
+                      <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {filtered.map((policy) => (
+                      <tr
+                        key={`${policy.device_id}-${policy.id}`}
+                        className={clsx('border-b border-dark-700/50 table-row-hover cursor-pointer', policy.status === 'disabled' && 'opacity-50')}
+                        onClick={() => setSelectedPolicy(policy)}
+                      >
+                        <td className="px-3 py-2.5 text-slate-500 font-mono text-xs">{policy.id}</td>
+                        <td className="px-3 py-2.5"><span className="font-medium text-slate-200">{policy.name}</span></td>
+                        <td className="px-3 py-2.5 text-xs text-slate-300 font-mono">{policy.source_interface}</td>
+                        <td className="px-3 py-2.5 text-xs text-slate-300 font-mono">{policy.dest_interface}</td>
+                        <td className="px-3 py-2.5 text-xs text-slate-300">{policy.source_address}</td>
+                        <td className="px-3 py-2.5 text-xs text-slate-300">{policy.dest_address}</td>
+                        <td className="px-3 py-2.5"><span className="text-xs px-1.5 py-0.5 bg-dark-700 rounded text-slate-300">{policy.service}</span></td>
+                        <td className="px-3 py-2.5">
+                          <span className={clsx(
+                            'inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border',
+                            policy.action === 'accept' ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30' :
+                            policy.action === 'deny' ? 'text-red-400 bg-red-400/10 border-red-400/30' :
+                            'text-amber-400 bg-amber-400/10 border-amber-400/30'
+                          )}>
+                            {policy.action === 'accept' && <CheckCircle2 className="w-3 h-3" />}
+                            {policy.action === 'deny' && <XCircle className="w-3 h-3" />}
+                            {policy.action}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5 text-center">
+                          {policy.nat ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 mx-auto" /> : <span className="text-slate-600">—</span>}
+                        </td>
+                        <td className="px-3 py-2.5 text-center">
+                          {policy.log ? <CheckCircle2 className="w-3.5 h-3.5 text-primary-400 mx-auto" /> : <span className="text-slate-600">—</span>}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          {policy.status === 'enabled' ? <ToggleRight className="w-5 h-5 text-emerald-400" /> : <ToggleLeft className="w-5 h-5 text-slate-500" />}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {!loadingPolicies && filtered.length === 0 && (
+              <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+                <Shield className="w-12 h-12 mb-3 text-slate-600" />
+                <p className="text-lg font-medium">No policies found</p>
+                <p className="text-sm mt-1">Click "Sync VDOM" to fetch policies from FortiGate</p>
+              </div>
+            )}
           </div>
-        </div>
+        </>
       )}
 
-      {activeTab === 'users' && (
-        <div className="glass-card overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-dark-700 text-left">
-                  <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Username</th>
-                  <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Auth Type</th>
-                  <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Groups</th>
-                  <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Status</th>
-                  <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Firewalls</th>
-                  <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Last Login</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleUsers.map((u) => (
-                  <tr key={u.id} className="border-b border-dark-700/50 table-row-hover">
-                    <td className="px-3 py-2.5 text-slate-200 font-medium">{u.username}</td>
-                    <td className="px-3 py-2.5 text-slate-300">{u.auth_type.toUpperCase()}</td>
-                    <td className="px-3 py-2.5 text-slate-300 text-xs">{u.groups.join(', ')}</td>
-                    <td className="px-3 py-2.5">
-                      <span className={clsx('px-2 py-0.5 text-xs rounded border',
-                        u.status === 'active'
-                          ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30'
-                          : 'text-red-400 bg-red-400/10 border-red-400/30')}>
-                        {u.status}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <div className="flex flex-wrap gap-1">
-                        {u.devices.map((id) => {
-                          const d = devices.find((x) => x.id === id);
-                          return <span key={`${u.id}-${id}`} className="px-2 py-0.5 text-[11px] rounded bg-dark-900 text-slate-300 border border-dark-600">{d?.name || id}</span>;
+      {/* OBJECTS TAB */}
+      {activeTab === 'objects' && (
+        <div className="space-y-4">
+          {/* Create Object Form */}
+          <div className="glass-card p-4 space-y-3">
+            <div className="flex items-center gap-3 mb-2">
+              <h3 className="text-sm font-semibold text-slate-200">Create New Object</h3>
+              <div className="flex items-center gap-1 bg-dark-900 rounded-lg p-0.5">
+                <button onClick={() => { setNewObjType('address'); setFormErrors({}); }} className={clsx('px-3 py-1 text-xs rounded-md', newObjType === 'address' ? 'bg-primary-500/20 text-primary-400' : 'text-slate-400')}>Address</button>
+                <button onClick={() => { setNewObjType('service'); setFormErrors({}); }} className={clsx('px-3 py-1 text-xs rounded-md', newObjType === 'service' ? 'bg-primary-500/20 text-primary-400' : 'text-slate-400')}>Service</button>
+              </div>
+              <span className="ml-auto text-xs text-slate-500">
+                Target: {currentDevice?.name || '—'} / {selectedVdom || 'root'}
+              </span>
+            </div>
+
+            {newObjType === 'address' && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <input value={addrName} onChange={(e) => setAddrName(e.target.value)} className={clsx('input-dark text-sm w-full', formErrors.addrName && 'border-red-500')} placeholder="Object name (e.g. HR_SUBNET)" />
+                  {formErrors.addrName && <p className="text-red-400 text-xs mt-1">{formErrors.addrName}</p>}
+                </div>
+                <select value={addrType} onChange={(e) => setAddrType(e.target.value as any)} className="input-dark text-sm">
+                  <option value="ipmask">IP/Mask (Subnet)</option>
+                  <option value="iprange">IP Range</option>
+                  <option value="fqdn">FQDN</option>
+                </select>
+                {addrType === 'ipmask' && (
+                  <div className="md:col-span-2">
+                    <input value={addrSubnet} onChange={(e) => setAddrSubnet(e.target.value)} className={clsx('input-dark text-sm w-full', formErrors.addrSubnet && 'border-red-500')} placeholder="Subnet (e.g. 10.0.0.0/24 or 10.0.0.0 255.255.255.0)" />
+                    {formErrors.addrSubnet && <p className="text-red-400 text-xs mt-1">{formErrors.addrSubnet}</p>}
+                  </div>
+                )}
+                {addrType === 'iprange' && (
+                  <>
+                    <div>
+                      <input value={addrStartIp} onChange={(e) => setAddrStartIp(e.target.value)} className={clsx('input-dark text-sm w-full', formErrors.addrStartIp && 'border-red-500')} placeholder="Start IP (e.g. 10.0.0.1)" />
+                      {formErrors.addrStartIp && <p className="text-red-400 text-xs mt-1">{formErrors.addrStartIp}</p>}
+                    </div>
+                    <div>
+                      <input value={addrEndIp} onChange={(e) => setAddrEndIp(e.target.value)} className={clsx('input-dark text-sm w-full', formErrors.addrEndIp && 'border-red-500')} placeholder="End IP (e.g. 10.0.0.254)" />
+                      {formErrors.addrEndIp && <p className="text-red-400 text-xs mt-1">{formErrors.addrEndIp}</p>}
+                    </div>
+                  </>
+                )}
+                {addrType === 'fqdn' && (
+                  <div className="md:col-span-2">
+                    <input value={addrFqdn} onChange={(e) => setAddrFqdn(e.target.value)} className={clsx('input-dark text-sm w-full', formErrors.addrFqdn && 'border-red-500')} placeholder="FQDN (e.g. *.google.com)" />
+                    {formErrors.addrFqdn && <p className="text-red-400 text-xs mt-1">{formErrors.addrFqdn}</p>}
+                  </div>
+                )}
+                <input value={addrComment} onChange={(e) => setAddrComment(e.target.value)} className="input-dark text-sm md:col-span-2" placeholder="Comment (optional)" />
+              </div>
+            )}
+
+            {newObjType === 'service' && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <input value={svcName} onChange={(e) => setSvcName(e.target.value)} className={clsx('input-dark text-sm w-full', formErrors.svcName && 'border-red-500')} placeholder="Service name (e.g. MY_WEB)" />
+                  {formErrors.svcName && <p className="text-red-400 text-xs mt-1">{formErrors.svcName}</p>}
+                </div>
+                <div>
+                  <input value={svcTcp} onChange={(e) => setSvcTcp(e.target.value)} className={clsx('input-dark text-sm w-full', formErrors.svcTcp && 'border-red-500')} placeholder="TCP ports (e.g. 80 443 8080-8090)" />
+                  {formErrors.svcTcp && <p className="text-red-400 text-xs mt-1">{formErrors.svcTcp}</p>}
+                </div>
+                <div>
+                  <input value={svcUdp} onChange={(e) => setSvcUdp(e.target.value)} className={clsx('input-dark text-sm w-full', formErrors.svcUdp && 'border-red-500')} placeholder="UDP ports (e.g. 53 123)" />
+                  {formErrors.svcUdp && <p className="text-red-400 text-xs mt-1">{formErrors.svcUdp}</p>}
+                </div>
+                <input value={svcComment} onChange={(e) => setSvcComment(e.target.value)} className="input-dark text-sm" placeholder="Comment (optional)" />
+              </div>
+            )}
+
+            {/* Multi-FW push toggle */}
+            <div className="border-t border-dark-700 pt-3 mt-1">
+              <button
+                type="button"
+                onClick={() => { setPushToMany((v) => !v); setPushTargets(new Set()); }}
+                className={clsx(
+                  'flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-lg border transition-all',
+                  pushToMany
+                    ? 'text-amber-400 bg-amber-400/10 border-amber-400/30'
+                    : 'text-slate-400 bg-dark-800 border-dark-600 hover:border-dark-500'
+                )}
+              >
+                <Send className="w-3.5 h-3.5" />
+                {pushToMany ? 'Multi-FW Push: ON' : 'Push to multiple firewalls'}
+                <ChevronDown className={clsx('w-3.5 h-3.5 transition-transform', pushToMany && 'rotate-180')} />
+              </button>
+
+              {pushToMany && (
+                <div className="mt-3 p-3 bg-dark-900/60 rounded-lg border border-dark-700 space-y-2">
+                  <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wider mb-2">Select target firewalls</p>
+                  {devices.map((dev) => (
+                    <div key={dev.id} className="space-y-1">
+                      <div className="flex items-center gap-1.5 text-xs text-slate-300 font-medium">
+                        <Cpu className="w-3 h-3 text-primary-400" />
+                        {dev.name}
+                      </div>
+                      <div className="ml-4 flex flex-wrap gap-1.5">
+                        {dev.vdoms.map((vdom) => {
+                          const key = `${dev.id}::${vdom}`;
+                          const checked = pushTargets.has(key);
+                          return (
+                            <label key={key} className={clsx(
+                              'flex items-center gap-1.5 px-2 py-1 rounded-md border cursor-pointer text-[11px] transition-all select-none',
+                              checked
+                                ? 'text-primary-400 bg-primary-400/10 border-primary-400/40'
+                                : 'text-slate-400 bg-dark-800 border-dark-600 hover:border-dark-500'
+                            )}>
+                              <input
+                                type="checkbox"
+                                className="sr-only"
+                                checked={checked}
+                                onChange={() => togglePushTarget(dev.id, vdom)}
+                              />
+                              <span className={clsx('w-3 h-3 rounded-sm border flex items-center justify-center flex-shrink-0',
+                                checked ? 'bg-primary-500 border-primary-500' : 'border-slate-600'
+                              )}>
+                                {checked && <CheckCircle2 className="w-2.5 h-2.5 text-white" />}
+                              </span>
+                              {vdom}
+                            </label>
+                          );
                         })}
                       </div>
-                    </td>
-                    <td className="px-3 py-2.5 text-slate-400 text-xs">{new Date(u.last_login).toLocaleString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </div>
+                  ))}
+                  {pushTargets.size > 0 && (
+                    <p className="text-[11px] text-amber-400 mt-1">{pushTargets.size} target{pushTargets.size > 1 ? 's' : ''} selected</p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              {!pushToMany ? (
+                <button onClick={handleCreateObject} disabled={creating || !selectedDeviceId} className="btn-primary text-sm">
+                  {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                  Create & Push to {currentDevice?.name || 'FW'} / {selectedVdom || 'root'}
+                </button>
+              ) : (
+                <button onClick={handlePushToMany} disabled={creating || pushTargets.size === 0} className="btn-primary text-sm bg-amber-500/20 border-amber-500/40 text-amber-300 hover:bg-amber-500/30">
+                  {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  Push to {pushTargets.size || '?'} target{pushTargets.size !== 1 ? 's' : ''}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Push Results Modal */}
+          {pushResultsOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              <div className="absolute inset-0 bg-black/60" onClick={() => setPushResultsOpen(false)} />
+              <div className="relative bg-dark-800 border border-dark-600 rounded-xl shadow-2xl w-full max-w-lg animate-fade-in overflow-hidden">
+                <div className="flex items-center justify-between px-5 py-4 border-b border-dark-700">
+                  <div className="flex items-center gap-2">
+                    <Send className="w-4 h-4 text-amber-400" />
+                    <h3 className="font-semibold text-slate-100">Push Results</h3>
+                  </div>
+                  <button onClick={() => setPushResultsOpen(false)} className="p-1 text-slate-400 hover:text-slate-200 hover:bg-dark-700 rounded-lg">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="p-5 space-y-3">
+                  <p className="text-sm text-slate-300">{pushSummary}</p>
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {pushResults.map((r, i) => (
+                      <div key={i} className={clsx(
+                        'flex items-center gap-3 px-3 py-2.5 rounded-lg border',
+                        r.success
+                          ? 'bg-emerald-400/5 border-emerald-400/20'
+                          : 'bg-red-400/5 border-red-400/20'
+                      )}>
+                        {r.success
+                          ? <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                          : <XCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
+                        }
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-slate-200">{r.device_name}</span>
+                            <span className="text-[10px] px-1.5 py-0.5 bg-dark-700 rounded text-primary-400">{r.vdom}</span>
+                          </div>
+                          {!r.success && r.error && (
+                            <p className="text-xs text-red-400 mt-0.5 truncate">{r.error}</p>
+                          )}
+                        </div>
+                        <span className={clsx('text-[11px] font-bold', r.success ? 'text-emerald-400' : 'text-red-400')}>
+                          {r.success ? 'OK' : 'FAILED'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="px-5 pb-4">
+                  <button onClick={() => setPushResultsOpen(false)} className="btn-secondary text-sm w-full">Close</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Objects Table */}
+          <div className="glass-card overflow-hidden">
+            {loadingObjects ? (
+              <div className="flex items-center justify-center py-16 gap-3 text-slate-400">
+                <Loader2 className="w-6 h-6 animate-spin" /> Loading objects from FortiGate...
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-dark-700 text-left">
+                      <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Name</th>
+                      <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Type</th>
+                      <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Value</th>
+                      <th className="px-3 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Comment</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleObjects.map((o, idx) => (
+                      <tr key={`${o.kind}-${o.name}-${idx}`} className="border-b border-dark-700/50 table-row-hover">
+                        <td className="px-3 py-2.5 text-slate-200 font-medium">{o.name}</td>
+                        <td className="px-3 py-2.5">
+                          <span className={clsx('px-2 py-0.5 text-[11px] rounded border', kindColors[o.kind] || 'text-slate-400 bg-slate-400/10 border-slate-400/30')}>
+                            {o.kind}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5 text-slate-300 font-mono text-xs max-w-xs truncate">{o.value}</td>
+                        <td className="px-3 py-2.5 text-slate-400 text-xs">{o.comment}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {!loadingObjects && visibleObjects.length === 0 && (
+              <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+                <Layers className="w-12 h-12 mb-3 text-slate-600" />
+                <p className="text-lg font-medium">No objects found</p>
+                <p className="text-sm mt-1">Objects are loaded live from the selected FortiGate</p>
+              </div>
+            )}
+            {!loadingObjects && objects.length > 0 && (
+              <div className="px-3 py-2 border-t border-dark-700 text-xs text-slate-500">
+                {objects.filter(o => o.kind === 'address').length} addresses, {objects.filter(o => o.kind === 'service').length} services, {objects.filter(o => o.kind === 'address-group').length} address groups, {objects.filter(o => o.kind === 'service-group').length} service groups
+              </div>
+            )}
           </div>
         </div>
       )}
 
+      {/* AUDIT TAB */}
       {activeTab === 'audit' && (() => {
-        const scopedPolicies = policies.filter((p) => {
-          const devMatch = selectedDeviceId === 'all' || p.device_id === selectedDeviceId;
-          const vdomMatch = selectedVdom === 'all' || p.vdom === selectedVdom;
-          return devMatch && vdomMatch;
-        });
-
+        const scopedPolicies = policies;
         const zeroHit = scopedPolicies.filter((p) => p.hit_count === 0 && p.status === 'enabled');
         const disabledPolicies = scopedPolicies.filter((p) => p.status === 'disabled');
         const lowHit = scopedPolicies.filter((p) => p.hit_count > 0 && p.hit_count < 100 && p.status === 'enabled');
@@ -623,37 +986,25 @@ export default function Policies() {
         const broadPolicies = scopedPolicies.filter((p) =>
           p.status === 'enabled' && p.action === 'accept' && p.service === 'ALL' && p.source_address === 'all'
         );
-
         const duplicateCandidates: LocalPolicy[][] = [];
         for (let i = 0; i < scopedPolicies.length; i++) {
           for (let j = i + 1; j < scopedPolicies.length; j++) {
             const a = scopedPolicies[i], b = scopedPolicies[j];
-            if (a.device_id === b.device_id && a.vdom === b.vdom &&
-              a.source_interface === b.source_interface && a.dest_interface === b.dest_interface &&
-              a.source_address === b.source_address && a.dest_address === b.dest_address &&
-              a.service === b.service) {
+            if (a.source_interface === b.source_interface && a.dest_interface === b.dest_interface &&
+              a.source_address === b.source_address && a.dest_address === b.dest_address && a.service === b.service)
               duplicateCandidates.push([a, b]);
-            }
           }
         }
 
         type AuditFinding = { severity: 'critical' | 'high' | 'medium' | 'low' | 'info'; category: string; description: string; policies: LocalPolicy[]; recommendation: string };
         const findings: AuditFinding[] = [];
-
-        if (broadPolicies.length > 0)
-          findings.push({ severity: 'critical', category: 'Security Risk', description: `${broadPolicies.length} overly permissive rule(s) — source "all", service "ALL", action "accept"`, policies: broadPolicies, recommendation: 'Restrict source addresses and services to follow least-privilege principle' });
-        if (zeroHit.length > 0)
-          findings.push({ severity: 'high', category: 'Unused Rules', description: `${zeroHit.length} enabled rule(s) with zero hits`, policies: zeroHit, recommendation: 'Consider disabling or removing these rules after verification' });
-        if (disabledPolicies.length > 0)
-          findings.push({ severity: 'medium', category: 'Disabled Rules', description: `${disabledPolicies.length} disabled rule(s) in policy table`, policies: disabledPolicies, recommendation: 'Clean up disabled rules to reduce policy complexity' });
-        if (noLogPolicies.length > 0)
-          findings.push({ severity: 'medium', category: 'No Logging', description: `${noLogPolicies.length} enabled rule(s) without logging`, policies: noLogPolicies, recommendation: 'Enable logging for traffic visibility and compliance' });
-        if (lowHit.length > 0)
-          findings.push({ severity: 'low', category: 'Low Usage', description: `${lowHit.length} rule(s) with very few hits (< 100)`, policies: lowHit, recommendation: 'Review if these rules are still needed' });
-        if (duplicateCandidates.length > 0)
-          findings.push({ severity: 'medium', category: 'Potential Duplicates', description: `${duplicateCandidates.length} pair(s) of rules with identical match criteria`, policies: duplicateCandidates.flat(), recommendation: 'Consolidate duplicate rules to simplify policy' });
-        if (denyAllPolicies.length > 0)
-          findings.push({ severity: 'info', category: 'Deny-All Rules', description: `${denyAllPolicies.length} explicit deny-all rule(s) found`, policies: denyAllPolicies, recommendation: 'This is good practice. Ensure these are at the bottom of the policy list' });
+        if (broadPolicies.length > 0) findings.push({ severity: 'critical', category: 'Security Risk', description: `${broadPolicies.length} overly permissive rule(s)`, policies: broadPolicies, recommendation: 'Restrict source addresses and services' });
+        if (zeroHit.length > 0) findings.push({ severity: 'high', category: 'Unused Rules', description: `${zeroHit.length} enabled rule(s) with zero hits`, policies: zeroHit, recommendation: 'Consider disabling or removing' });
+        if (disabledPolicies.length > 0) findings.push({ severity: 'medium', category: 'Disabled Rules', description: `${disabledPolicies.length} disabled rule(s)`, policies: disabledPolicies, recommendation: 'Clean up disabled rules' });
+        if (noLogPolicies.length > 0) findings.push({ severity: 'medium', category: 'No Logging', description: `${noLogPolicies.length} rule(s) without logging`, policies: noLogPolicies, recommendation: 'Enable logging' });
+        if (lowHit.length > 0) findings.push({ severity: 'low', category: 'Low Usage', description: `${lowHit.length} rule(s) with < 100 hits`, policies: lowHit, recommendation: 'Review if still needed' });
+        if (duplicateCandidates.length > 0) findings.push({ severity: 'medium', category: 'Potential Duplicates', description: `${duplicateCandidates.length} pair(s) with identical criteria`, policies: duplicateCandidates.flat(), recommendation: 'Consolidate duplicate rules' });
+        if (denyAllPolicies.length > 0) findings.push({ severity: 'info', category: 'Deny-All Rules', description: `${denyAllPolicies.length} explicit deny-all rule(s)`, policies: denyAllPolicies, recommendation: 'Good practice — ensure at bottom' });
 
         const totalIssues = findings.filter((f) => f.severity !== 'info').reduce((s, f) => s + f.policies.length, 0);
         const score = scopedPolicies.length > 0 ? Math.max(0, Math.round(100 - (totalIssues / scopedPolicies.length) * 60)) : 100;
@@ -710,6 +1061,14 @@ export default function Policies() {
               </div>
             </div>
 
+            {scopedPolicies.length === 0 && (
+              <div className="glass-card p-12 text-center">
+                <Shield className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                <p className="text-lg font-medium text-slate-300">No policies to audit</p>
+                <p className="text-sm text-slate-400 mt-1">Sync policies first, then come back to audit</p>
+              </div>
+            )}
+
             <div className="space-y-3">
               {findings.map((finding, idx) => (
                 <div key={idx} className={clsx('glass-card overflow-hidden border-l-2', finding.severity === 'critical' ? 'border-l-red-500' : finding.severity === 'high' ? 'border-l-orange-500' : finding.severity === 'medium' ? 'border-l-amber-500' : finding.severity === 'low' ? 'border-l-blue-500' : 'border-l-slate-500')}>
@@ -722,9 +1081,7 @@ export default function Policies() {
                           <span className="text-xs font-semibold text-slate-200">{finding.category}</span>
                         </div>
                         <p className="text-xs text-slate-300">{finding.description}</p>
-                        <p className="text-[10px] text-slate-500 mt-1 flex items-center gap-1">
-                          <Layers className="w-3 h-3" /> Recommendation: {finding.recommendation}
-                        </p>
+                        <p className="text-[10px] text-slate-500 mt-1">{finding.recommendation}</p>
                       </div>
                     </div>
                     {finding.policies.length > 0 && (
@@ -736,25 +1093,20 @@ export default function Policies() {
                               <th className="px-2 py-1.5 text-[10px] text-slate-500 uppercase">Name</th>
                               <th className="px-2 py-1.5 text-[10px] text-slate-500 uppercase">Action</th>
                               <th className="px-2 py-1.5 text-[10px] text-slate-500 uppercase">Source</th>
-                              <th className="px-2 py-1.5 text-[10px] text-slate-500 uppercase">Destination</th>
                               <th className="px-2 py-1.5 text-[10px] text-slate-500 uppercase">Service</th>
-                              <th className="px-2 py-1.5 text-[10px] text-slate-500 uppercase text-right">Hit Count</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {finding.policies.slice(0, 10).map((p) => (
-                              <tr key={`${p.device_id}-${p.id}`} className="border-b border-dark-700/30 hover:bg-dark-800/30">
+                            {finding.policies.slice(0, 10).map((p, pi) => (
+                              <tr key={`${p.device_id}-${p.id}-${pi}`} className="border-b border-dark-700/30 hover:bg-dark-800/30">
                                 <td className="px-2 py-1.5 text-slate-500 font-mono">{p.id}</td>
                                 <td className="px-2 py-1.5 text-slate-200">{p.name}</td>
                                 <td className="px-2 py-1.5">
                                   <span className={clsx('px-1.5 py-0.5 rounded text-[10px] border',
-                                    p.action === 'accept' ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30' :
-                                    'text-red-400 bg-red-400/10 border-red-400/30')}>{p.action}</span>
+                                    p.action === 'accept' ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30' : 'text-red-400 bg-red-400/10 border-red-400/30')}>{p.action}</span>
                                 </td>
                                 <td className="px-2 py-1.5 text-slate-300 font-mono">{p.source_address}</td>
-                                <td className="px-2 py-1.5 text-slate-300 font-mono">{p.dest_address}</td>
                                 <td className="px-2 py-1.5 text-slate-300">{p.service}</td>
-                                <td className="px-2 py-1.5 text-slate-300 font-mono text-right">{p.hit_count.toLocaleString()}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -764,7 +1116,7 @@ export default function Policies() {
                   </div>
                 </div>
               ))}
-              {findings.length === 0 && (
+              {findings.length === 0 && scopedPolicies.length > 0 && (
                 <div className="glass-card p-12 text-center">
                   <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto mb-3" />
                   <p className="text-lg font-medium text-slate-200">No audit findings</p>
@@ -776,6 +1128,7 @@ export default function Policies() {
         );
       })()}
 
+      {/* Policy Detail Slide-in */}
       {selectedPolicy && (
         <div className="fixed inset-y-0 right-0 w-full max-w-md z-50 animate-slide-in-right">
           <div className="absolute inset-0 bg-black/40" onClick={() => setSelectedPolicy(null)} />
@@ -785,32 +1138,24 @@ export default function Policies() {
                 <Shield className="w-4 h-4 text-primary-400" />
                 <h3 className="font-semibold text-slate-100">Policy #{selectedPolicy.id}</h3>
               </div>
-              <button onClick={() => setSelectedPolicy(null)} className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-dark-700 rounded-lg">
-                <X className="w-5 h-5" />
-              </button>
+              <button onClick={() => setSelectedPolicy(null)} className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-dark-700 rounded-lg"><X className="w-5 h-5" /></button>
             </div>
             <div className="p-6 space-y-5">
               <div>
                 <h4 className="text-lg font-bold text-slate-100">{selectedPolicy.name}</h4>
                 <p className="text-sm text-slate-400 mt-1">{selectedPolicy.comments}</p>
               </div>
-
               <div className="flex items-center gap-3">
                 <span className={clsx(
                   'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium text-sm border',
-                  selectedPolicy.action === 'accept' ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30' :
-                  'text-red-400 bg-red-400/10 border-red-400/30'
+                  selectedPolicy.action === 'accept' ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30' : 'text-red-400 bg-red-400/10 border-red-400/30'
                 )}>
                   {selectedPolicy.action === 'accept' ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
                   {selectedPolicy.action.toUpperCase()}
                 </span>
-                {selectedPolicy.status === 'enabled' ? (
-                  <span className="inline-flex items-center gap-1 text-sm text-emerald-400"><ToggleRight className="w-5 h-5" /> Enabled</span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 text-sm text-slate-400"><ToggleLeft className="w-5 h-5" /> Disabled</span>
-                )}
+                {selectedPolicy.status === 'enabled' ? <span className="inline-flex items-center gap-1 text-sm text-emerald-400"><ToggleRight className="w-5 h-5" /> Enabled</span>
+                  : <span className="inline-flex items-center gap-1 text-sm text-slate-400"><ToggleLeft className="w-5 h-5" /> Disabled</span>}
               </div>
-
               <div className="space-y-3">
                 {[
                   { label: 'Source Interface', value: selectedPolicy.source_interface },
@@ -829,7 +1174,6 @@ export default function Policies() {
                   </div>
                 ))}
               </div>
-
               <div className="bg-dark-900/50 rounded-lg p-4">
                 <p className="text-xs text-slate-500 uppercase tracking-wider mb-2">Traffic Flow</p>
                 <div className="flex items-center gap-2 text-sm">
